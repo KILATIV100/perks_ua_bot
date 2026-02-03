@@ -4,7 +4,10 @@ import { PrismaClient } from '@prisma/client';
 import { locationRoutes } from './routes/locations.js';
 import { orderRoutes } from './routes/orders.js';
 
-const prisma = new PrismaClient();
+// Prisma client - uses DATABASE_URL from environment
+const prisma = new PrismaClient({
+  log: ['error', 'warn'],
+});
 
 const app = Fastify({
   logger: true,
@@ -37,9 +40,9 @@ app.register(cors, {
 // Decorate with Prisma
 app.decorate('prisma', prisma);
 
-// Health check
-app.get('/health', async () => {
-  return { status: 'ok', timestamp: new Date().toISOString() };
+// Health check - simple response for Railway
+app.get('/health', async (_request, reply) => {
+  return reply.code(200).send('OK');
 });
 
 // Register routes
@@ -59,12 +62,17 @@ process.on('SIGINT', gracefulShutdown);
 // Start server
 const start = async (): Promise<void> => {
   try {
+    // Verify database connection on startup
+    await prisma.$connect();
+    console.log('✅ Database connected');
+
     const port = parseInt(process.env.PORT || '3000', 10);
     const host = '0.0.0.0';
 
     await app.listen({ port, host });
     console.log(`🚀 Server running on http://${host}:${port}`);
   } catch (err) {
+    console.error('❌ Failed to start server:', err);
     app.log.error(err);
     process.exit(1);
   }

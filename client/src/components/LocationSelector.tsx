@@ -77,12 +77,13 @@ function LocationSelector({ locations, selectedLocation, onSelect }: LocationSel
               key={location.id}
               onClick={() => onSelect(location)}
               className={`rounded-2xl p-4 cursor-pointer transition-all duration-200 ${
-                isSelected ? 'ring-2 shadow-md' : 'shadow-sm'
-              } ${isComingSoon ? 'opacity-75' : ''}`}
+                isComingSoon ? 'opacity-75' : ''
+              }`}
               style={{
                 backgroundColor: theme.bgColor,
-                borderColor: isSelected ? theme.buttonColor : 'transparent',
-                ringColor: isSelected ? theme.buttonColor : 'transparent',
+                boxShadow: isSelected
+                  ? `0 0 0 2px ${theme.buttonColor}, 0 4px 6px -1px rgba(0, 0, 0, 0.1)`
+                  : '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
               }}
             >
               <div className="flex items-start gap-3">
