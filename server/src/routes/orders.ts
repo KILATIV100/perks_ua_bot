@@ -43,13 +43,17 @@ export async function orderRoutes(
       });
     }
 
-    // Check location exists
+    // Check location exists and is active
     const location = await app.prisma.location.findUnique({
       where: { id: locationId },
     });
 
     if (!location) {
       return reply.status(404).send({ error: 'Location not found' });
+    }
+
+    if (location.status === 'coming_soon') {
+      return reply.status(400).send({ error: 'Location is not yet available for orders' });
     }
 
     // Calculate total price

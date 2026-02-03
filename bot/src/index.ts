@@ -2,14 +2,12 @@ import { Bot, InlineKeyboard } from 'grammy';
 
 // Environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const MINI_APP_URL = process.env.MINI_APP_URL;
+
+// WebApp URL - perkup.com.ua
+const WEB_APP_URL = 'https://perkup.com.ua';
 
 if (!BOT_TOKEN) {
   throw new Error('BOT_TOKEN environment variable is required');
-}
-
-if (!MINI_APP_URL) {
-  throw new Error('MINI_APP_URL environment variable is required');
 }
 
 const bot = new Bot(BOT_TOKEN);
@@ -21,7 +19,7 @@ bot.command('start', async (ctx) => {
 
   const keyboard = new InlineKeyboard().webApp(
     '☕ Відкрити PerkUp',
-    MINI_APP_URL
+    WEB_APP_URL
   );
 
   await ctx.reply(
@@ -43,7 +41,7 @@ bot.command('start', async (ctx) => {
 bot.command('help', async (ctx) => {
   const keyboard = new InlineKeyboard().webApp(
     '☕ Відкрити PerkUp',
-    MINI_APP_URL
+    WEB_APP_URL
   );
 
   await ctx.reply(
@@ -64,7 +62,7 @@ bot.command('help', async (ctx) => {
 bot.on('message:text', async (ctx) => {
   const keyboard = new InlineKeyboard().webApp(
     '☕ Відкрити PerkUp',
-    MINI_APP_URL
+    WEB_APP_URL
   );
 
   await ctx.reply(

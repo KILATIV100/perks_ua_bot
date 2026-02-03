@@ -7,15 +7,20 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum LocationStatus {
+  active
+  coming_soon
+}
+
 model Location {
-  id        String   @id @default(uuid())
+  id        String         @id @default(uuid())
   name      String
-  latitude  Float?
-  longitude Float?
+  lat       Float?
+  long      Float?
   address   String?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  status    LocationStatus @default(active)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
   orders    Order[]
 
   @@map("locations")

@@ -3,18 +3,18 @@ import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 export async function locationRoutes(
   app: FastifyInstance,
   _opts: FastifyPluginOptions
-) {
-  // Get all active locations
+): Promise<void> {
+  // Get all locations
   app.get('/', async (_request, reply) => {
     const locations = await app.prisma.location.findMany({
-      where: { isActive: true },
       orderBy: { name: 'asc' },
       select: {
         id: true,
         name: true,
-        latitude: true,
-        longitude: true,
+        lat: true,
+        long: true,
         address: true,
+        status: true,
       },
     });
 
@@ -30,9 +30,10 @@ export async function locationRoutes(
       select: {
         id: true,
         name: true,
-        latitude: true,
-        longitude: true,
+        lat: true,
+        long: true,
         address: true,
+        status: true,
       },
     });
 

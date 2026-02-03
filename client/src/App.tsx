@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import axios from 'axios';
 import LocationSelector from './components/LocationSelector';
 
 declare global {
@@ -43,13 +44,28 @@ declare global {
   }
 }
 
+type LocationStatus = 'active' | 'coming_soon';
+
 interface Location {
   id: string;
   name: string;
-  latitude: number | null;
-  longitude: number | null;
+  lat: number | null;
+  long: number | null;
   address: string | null;
+  status: LocationStatus;
 }
+
+// API base URL
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.perkup.com.ua';
+
+// Axios instance
+const api = axios.create({
+  baseURL: API_URL,
+  timeout: 10000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
 
 function App() {
   const [locations, setLocations] = useState<Location[]>([]);
@@ -73,8 +89,9 @@ function App() {
   useEffect(() => {
     if (!tg) return;
 
-    if (selectedLocation) {
-      tg.MainButton.text = 'Продовжити';
+    // Only show button if selected location is active
+    if (selectedLocation && selectedLocation.status === 'active') {
+      tg.MainButton.text = 'Замовити';
       tg.MainButton.show();
       tg.MainButton.enable();
     } else {
@@ -82,10 +99,10 @@ function App() {
     }
 
     const handleMainButtonClick = () => {
-      if (selectedLocation) {
-        // In a full app, navigate to menu or next screen
+      if (selectedLocation && selectedLocation.status === 'active') {
+        // Navigate to menu or next screen
         console.log('Selected location:', selectedLocation);
-        alert(`Обрано: ${selectedLocation.name}`);
+        alert(`Обрано: ${selectedLocation.name}\nПереходимо до меню...`);
       }
     };
 
@@ -99,17 +116,16 @@ function App() {
   const fetchLocations = async () => {
     try {
       setLoading(true);
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-      const response = await fetch(`${apiUrl}/api/locations`);
+      setError(null);
 
-      if (!response.ok) {
-        throw new Error('Failed to fetch locations');
-      }
-
-      const data = await response.json();
-      setLocations(data.locations);
+      const response = await api.get<{ locations: Location[] }>('/api/locations');
+      setLocations(response.data.locations);
     } catch (err) {
-      setError('Не вдалося завантажити локації');
+      if (axios.isAxiosError(err)) {
+        setError(err.response?.data?.error || 'Не вдалося завантажити локації');
+      } else {
+        setError('Не вдалося завантажити локації');
+      }
       console.error('Fetch error:', err);
     } finally {
       setLoading(false);
@@ -117,7 +133,12 @@ function App() {
   };
 
   const handleSelectLocation = (location: Location) => {
-    setSelectedLocation(location.id === selectedLocation?.id ? null : location);
+    // Toggle selection
+    if (selectedLocation?.id === location.id) {
+      setSelectedLocation(null);
+    } else {
+      setSelectedLocation(location);
+    }
   };
 
   if (loading) {

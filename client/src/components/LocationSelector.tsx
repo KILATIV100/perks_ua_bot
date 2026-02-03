@@ -1,9 +1,12 @@
+type LocationStatus = 'active' | 'coming_soon';
+
 interface Location {
   id: string;
   name: string;
-  latitude: number | null;
-  longitude: number | null;
+  lat: number | null;
+  long: number | null;
   address: string | null;
+  status: LocationStatus;
 }
 
 interface LocationSelectorProps {
@@ -27,18 +30,24 @@ function LocationSelector({ locations, selectedLocation, onSelect }: LocationSel
       <div className="space-y-3">
         {locations.map((location) => {
           const isSelected = selectedLocation?.id === location.id;
-          const hasCoordinates = location.latitude && location.longitude;
+          const isComingSoon = location.status === 'coming_soon';
 
           return (
             <div
               key={location.id}
               onClick={() => onSelect(location)}
-              className={`location-card ${isSelected ? 'selected' : ''}`}
+              className={`location-card ${isSelected ? 'selected' : ''} ${
+                isComingSoon ? 'opacity-75' : ''
+              }`}
             >
               <div className="flex items-start gap-3">
                 <div
                   className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
-                    isSelected ? 'bg-coffee text-white' : 'bg-primary-100 text-coffee'
+                    isComingSoon
+                      ? 'bg-gray-100 text-gray-400'
+                      : isSelected
+                      ? 'bg-coffee text-white'
+                      : 'bg-primary-100 text-coffee'
                   }`}
                 >
                   <svg
@@ -71,21 +80,47 @@ function LocationSelector({ locations, selectedLocation, onSelect }: LocationSel
                       {location.address}
                     </p>
                   )}
-                  {!hasCoordinates && (
+
+                  {/* Coming soon badge */}
+                  {isComingSoon && (
                     <span className="inline-flex items-center mt-2 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
                       Скоро відкриття
                     </span>
                   )}
+
+                  {/* Order button - disabled for coming_soon */}
+                  <div className="mt-3">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isComingSoon) {
+                          onSelect(location);
+                        }
+                      }}
+                      disabled={isComingSoon}
+                      className={`w-full py-2 px-4 rounded-lg text-sm font-medium transition-all ${
+                        isComingSoon
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                          : isSelected
+                          ? 'bg-coffee text-white'
+                          : 'bg-primary-100 text-coffee hover:bg-primary-200'
+                      }`}
+                    >
+                      {isComingSoon ? 'Скоро відкриття' : 'Замовити'}
+                    </button>
+                  </div>
                 </div>
 
                 <div
                   className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
-                    isSelected
+                    isComingSoon
+                      ? 'border-gray-300 bg-gray-100'
+                      : isSelected
                       ? 'border-coffee bg-coffee'
                       : 'border-gray-300 bg-white'
                   }`}
                 >
-                  {isSelected && (
+                  {isSelected && !isComingSoon && (
                     <svg
                       className="w-4 h-4 text-white"
                       fill="none"

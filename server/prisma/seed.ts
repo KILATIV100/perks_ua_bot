@@ -1,52 +1,61 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, LocationStatus } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-const locations = [
+interface LocationSeed {
+  name: string;
+  lat: number | null;
+  long: number | null;
+  address: string;
+  status: LocationStatus;
+}
+
+const locations: LocationSeed[] = [
   {
     name: 'Mark Mall',
-    latitude: 50.514794,
-    longitude: 30.782308,
-    address: 'ТРЦ Mark Mall',
+    lat: 50.514794,
+    long: 30.782308,
+    address: 'ТРЦ Mark Mall, Бровари',
+    status: 'active',
   },
   {
     name: 'Парк "Приозерний"',
-    latitude: 50.501265,
-    longitude: 30.754011,
-    address: 'Парк Приозерний',
+    lat: 50.501265,
+    long: 30.754011,
+    address: 'Парк Приозерний, Бровари',
+    status: 'active',
   },
   {
     name: 'ЖК "Лісовий квартал"',
-    latitude: null,
-    longitude: null,
-    address: 'ЖК Лісовий квартал (локація уточнюється)',
+    lat: null,
+    long: null,
+    address: 'ЖК Лісовий квартал, Бровари',
+    status: 'coming_soon',
   },
 ];
 
-async function main() {
+async function main(): Promise<void> {
   console.log('🌱 Seeding database...');
 
-  for (const location of locations) {
-    const existing = await prisma.location.findFirst({
-      where: { name: location.name },
-    });
+  // Clear existing locations
+  await prisma.location.deleteMany({});
+  console.log('🗑️ Cleared existing locations');
 
-    if (!existing) {
-      await prisma.location.create({
-        data: location,
-      });
-      console.log(`✅ Created location: ${location.name}`);
-    } else {
-      console.log(`⏭️ Location already exists: ${location.name}`);
-    }
+  // Create new locations
+  for (const location of locations) {
+    await prisma.location.create({
+      data: location,
+    });
+    console.log(`✅ Created location: ${location.name} (${location.status})`);
   }
 
-  console.log('🎉 Seeding completed!');
+  const count = await prisma.location.count();
+  console.log(`🎉 Seeding completed! Total locations: ${count}`);
 }
 
 main()
-  .catch((e) => {
-    console.error('❌ Seeding error:', e);
+  .catch((e: Error) => {
+    console.error('❌ Seeding error:', e.message);
     process.exit(1);
   })
   .finally(async () => {

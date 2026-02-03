@@ -10,10 +10,16 @@ const app = Fastify({
   logger: true,
 });
 
-// Register CORS for Mini App
+// Register CORS for perkup.com.ua domain
 app.register(cors, {
-  origin: true,
+  origin: [
+    'https://perkup.com.ua',
+    'https://www.perkup.com.ua',
+    /\.perkup\.com\.ua$/,
+  ],
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 });
 
 // Decorate with Prisma
@@ -29,7 +35,7 @@ app.register(locationRoutes, { prefix: '/api/locations' });
 app.register(orderRoutes, { prefix: '/api/orders' });
 
 // Graceful shutdown
-const gracefulShutdown = async () => {
+const gracefulShutdown = async (): Promise<void> => {
   await app.close();
   await prisma.$disconnect();
   process.exit(0);
@@ -39,7 +45,7 @@ process.on('SIGTERM', gracefulShutdown);
 process.on('SIGINT', gracefulShutdown);
 
 // Start server
-const start = async () => {
+const start = async (): Promise<void> => {
   try {
     const port = parseInt(process.env.PORT || '3000', 10);
     const host = '0.0.0.0';
