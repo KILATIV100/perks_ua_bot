@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import axios from 'axios';
 import LocationSelector from './components/LocationSelector';
 
@@ -9,8 +9,12 @@ declare global {
         ready: () => void;
         expand: () => void;
         close: () => void;
+        setHeaderColor: (color: string) => void;
+        setBackgroundColor: (color: string) => void;
         MainButton: {
           text: string;
+          color: string;
+          textColor: string;
           show: () => void;
           hide: () => void;
           onClick: (callback: () => void) => void;
@@ -39,6 +43,7 @@ declare global {
           button_text_color?: string;
           secondary_bg_color?: string;
         };
+        colorScheme: 'light' | 'dark';
       };
     };
   }
@@ -55,6 +60,16 @@ interface Location {
   status: LocationStatus;
 }
 
+interface TelegramTheme {
+  bgColor: string;
+  textColor: string;
+  hintColor: string;
+  buttonColor: string;
+  buttonTextColor: string;
+  secondaryBgColor: string;
+  isDark: boolean;
+}
+
 // API base URL
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.perkup.com.ua';
 
@@ -67,6 +82,24 @@ const api = axios.create({
   },
 });
 
+function useTelegramTheme(): TelegramTheme {
+  return useMemo(() => {
+    const tg = window.Telegram?.WebApp;
+    const params = tg?.themeParams;
+    const isDark = tg?.colorScheme === 'dark';
+
+    return {
+      bgColor: params?.bg_color || (isDark ? '#1c1c1e' : '#ffffff'),
+      textColor: params?.text_color || (isDark ? '#ffffff' : '#000000'),
+      hintColor: params?.hint_color || (isDark ? '#8e8e93' : '#999999'),
+      buttonColor: params?.button_color || '#8B5A2B',
+      buttonTextColor: params?.button_text_color || '#ffffff',
+      secondaryBgColor: params?.secondary_bg_color || (isDark ? '#2c2c2e' : '#f5f5f5'),
+      isDark,
+    };
+  }, []);
+}
+
 function App() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
@@ -74,12 +107,17 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   const tg = window.Telegram?.WebApp;
+  const theme = useTelegramTheme();
 
   useEffect(() => {
     // Initialize Telegram WebApp
     if (tg) {
       tg.ready();
       tg.expand();
+
+      // Set native colors
+      tg.setHeaderColor(theme.bgColor);
+      tg.setBackgroundColor(theme.secondaryBgColor);
     }
 
     // Fetch locations
@@ -92,6 +130,8 @@ function App() {
     // Only show button if selected location is active
     if (selectedLocation && selectedLocation.status === 'active') {
       tg.MainButton.text = 'Замовити';
+      tg.MainButton.color = theme.buttonColor;
+      tg.MainButton.textColor = theme.buttonTextColor;
       tg.MainButton.show();
       tg.MainButton.enable();
     } else {
@@ -111,7 +151,7 @@ function App() {
     return () => {
       tg.MainButton.offClick(handleMainButtonClick);
     };
-  }, [selectedLocation, tg]);
+  }, [selectedLocation, tg, theme]);
 
   const fetchLocations = async () => {
     try {
@@ -143,10 +183,16 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ backgroundColor: theme.secondaryBgColor }}
+      >
         <div className="text-center">
-          <div className="w-12 h-12 border-4 border-coffee border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-500">Завантаження...</p>
+          <div
+            className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin mx-auto mb-4"
+            style={{ borderColor: theme.buttonColor, borderTopColor: 'transparent' }}
+          />
+          <p style={{ color: theme.hintColor }}>Завантаження...</p>
         </div>
       </div>
     );
@@ -154,10 +200,20 @@ function App() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+      <div
+        className="min-h-screen flex items-center justify-center p-4"
+        style={{ backgroundColor: theme.secondaryBgColor }}
+      >
         <div className="text-center">
-          <p className="text-red-500 mb-4">{error}</p>
-          <button onClick={fetchLocations} className="btn-primary">
+          <p className="mb-4" style={{ color: '#ef4444' }}>{error}</p>
+          <button
+            onClick={fetchLocations}
+            className="py-3 px-6 rounded-xl font-medium transition-all"
+            style={{
+              backgroundColor: theme.buttonColor,
+              color: theme.buttonTextColor,
+            }}
+          >
             Спробувати знову
           </button>
         </div>
@@ -166,10 +222,22 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
+    <div
+      className="min-h-screen"
+      style={{ backgroundColor: theme.secondaryBgColor }}
+    >
+      <header
+        className="sticky top-0 z-10 border-b"
+        style={{
+          backgroundColor: theme.bgColor,
+          borderColor: theme.isDark ? '#3c3c3e' : '#e5e5e5',
+        }}
+      >
         <div className="px-4 py-4">
-          <h1 className="text-xl font-bold text-coffee-dark flex items-center gap-2">
+          <h1
+            className="text-xl font-bold flex items-center gap-2"
+            style={{ color: theme.textColor }}
+          >
             <span>☕</span>
             PerkUp
           </h1>

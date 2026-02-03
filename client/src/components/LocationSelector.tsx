@@ -1,3 +1,5 @@
+import { useMemo } from 'react';
+
 type LocationStatus = 'active' | 'coming_soon';
 
 interface Location {
@@ -15,14 +17,51 @@ interface LocationSelectorProps {
   onSelect: (location: Location) => void;
 }
 
+interface TelegramTheme {
+  bgColor: string;
+  textColor: string;
+  hintColor: string;
+  buttonColor: string;
+  buttonTextColor: string;
+  secondaryBgColor: string;
+}
+
+function useTelegramTheme(): TelegramTheme {
+  return useMemo(() => {
+    const tg = window.Telegram?.WebApp;
+    const params = tg?.themeParams;
+
+    return {
+      bgColor: params?.bg_color || '#ffffff',
+      textColor: params?.text_color || '#000000',
+      hintColor: params?.hint_color || '#999999',
+      buttonColor: params?.button_color || '#8B5A2B',
+      buttonTextColor: params?.button_text_color || '#ffffff',
+      secondaryBgColor: params?.secondary_bg_color || '#f5f5f5',
+    };
+  }, []);
+}
+
 function LocationSelector({ locations, selectedLocation, onSelect }: LocationSelectorProps) {
+  const theme = useTelegramTheme();
+
+  const hasCoordinates = (location: Location): boolean => {
+    return location.lat !== null && location.long !== null;
+  };
+
   return (
     <div className="space-y-4">
       <div className="mb-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-1">
+        <h2
+          className="text-lg font-semibold mb-1"
+          style={{ color: theme.textColor }}
+        >
           Оберіть локацію
         </h2>
-        <p className="text-sm text-gray-500">
+        <p
+          className="text-sm"
+          style={{ color: theme.hintColor }}
+        >
           Виберіть кав'ярню, де бажаєте зробити замовлення
         </p>
       </div>
@@ -31,24 +70,37 @@ function LocationSelector({ locations, selectedLocation, onSelect }: LocationSel
         {locations.map((location) => {
           const isSelected = selectedLocation?.id === location.id;
           const isComingSoon = location.status === 'coming_soon';
+          const hasCoords = hasCoordinates(location);
 
           return (
             <div
               key={location.id}
               onClick={() => onSelect(location)}
-              className={`location-card ${isSelected ? 'selected' : ''} ${
-                isComingSoon ? 'opacity-75' : ''
-              }`}
+              className={`rounded-2xl p-4 cursor-pointer transition-all duration-200 ${
+                isSelected ? 'ring-2 shadow-md' : 'shadow-sm'
+              } ${isComingSoon ? 'opacity-75' : ''}`}
+              style={{
+                backgroundColor: theme.bgColor,
+                borderColor: isSelected ? theme.buttonColor : 'transparent',
+                ringColor: isSelected ? theme.buttonColor : 'transparent',
+              }}
             >
               <div className="flex items-start gap-3">
+                {/* Location icon */}
                 <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
-                    isComingSoon
-                      ? 'bg-gray-100 text-gray-400'
+                  className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
+                  style={{
+                    backgroundColor: isComingSoon
+                      ? theme.secondaryBgColor
                       : isSelected
-                      ? 'bg-coffee text-white'
-                      : 'bg-primary-100 text-coffee'
-                  }`}
+                      ? theme.buttonColor
+                      : `${theme.buttonColor}20`,
+                    color: isComingSoon
+                      ? theme.hintColor
+                      : isSelected
+                      ? theme.buttonTextColor
+                      : theme.buttonColor,
+                  }}
                 >
                   <svg
                     className="w-5 h-5"
@@ -72,12 +124,28 @@ function LocationSelector({ locations, selectedLocation, onSelect }: LocationSel
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-medium text-gray-900 truncate">
+                  <h3
+                    className="font-medium truncate"
+                    style={{ color: theme.textColor }}
+                  >
                     {location.name}
                   </h3>
-                  {location.address && (
-                    <p className="text-sm text-gray-500 mt-0.5 truncate">
+
+                  {/* Address or "Адреса уточнюється" */}
+                  {hasCoords && location.address ? (
+                    <p
+                      className="text-sm mt-0.5 truncate"
+                      style={{ color: theme.hintColor }}
+                    >
                       {location.address}
+                    </p>
+                  ) : (
+                    <p
+                      className="text-sm mt-0.5 flex items-center gap-1"
+                      style={{ color: theme.hintColor }}
+                    >
+                      <span>⏳</span>
+                      <span>Адреса уточнюється</span>
                     </p>
                   )}
 
@@ -98,33 +166,45 @@ function LocationSelector({ locations, selectedLocation, onSelect }: LocationSel
                         }
                       }}
                       disabled={isComingSoon}
-                      className={`w-full py-2 px-4 rounded-lg text-sm font-medium transition-all ${
-                        isComingSoon
-                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      className="w-full py-2 px-4 rounded-lg text-sm font-medium transition-all"
+                      style={{
+                        backgroundColor: isComingSoon
+                          ? theme.secondaryBgColor
                           : isSelected
-                          ? 'bg-coffee text-white'
-                          : 'bg-primary-100 text-coffee hover:bg-primary-200'
-                      }`}
+                          ? theme.buttonColor
+                          : `${theme.buttonColor}15`,
+                        color: isComingSoon
+                          ? theme.hintColor
+                          : isSelected
+                          ? theme.buttonTextColor
+                          : theme.buttonColor,
+                        cursor: isComingSoon ? 'not-allowed' : 'pointer',
+                      }}
                     >
                       {isComingSoon ? 'Скоро відкриття' : 'Замовити'}
                     </button>
                   </div>
                 </div>
 
+                {/* Selection indicator */}
                 <div
-                  className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
-                    isComingSoon
-                      ? 'border-gray-300 bg-gray-100'
+                  className="w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors"
+                  style={{
+                    borderColor: isComingSoon
+                      ? theme.hintColor
                       : isSelected
-                      ? 'border-coffee bg-coffee'
-                      : 'border-gray-300 bg-white'
-                  }`}
+                      ? theme.buttonColor
+                      : theme.hintColor,
+                    backgroundColor: isSelected && !isComingSoon
+                      ? theme.buttonColor
+                      : theme.bgColor,
+                  }}
                 >
                   {isSelected && !isComingSoon && (
                     <svg
-                      className="w-4 h-4 text-white"
+                      className="w-4 h-4"
                       fill="none"
-                      stroke="currentColor"
+                      stroke={theme.buttonTextColor}
                       viewBox="0 0 24 24"
                     >
                       <path
@@ -144,7 +224,7 @@ function LocationSelector({ locations, selectedLocation, onSelect }: LocationSel
 
       {locations.length === 0 && (
         <div className="text-center py-8">
-          <p className="text-gray-500">Локації не знайдено</p>
+          <p style={{ color: theme.hintColor }}>Локації не знайдено</p>
         </div>
       )}
     </div>

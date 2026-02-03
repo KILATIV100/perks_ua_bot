@@ -10,13 +10,25 @@ const app = Fastify({
   logger: true,
 });
 
-// Register CORS for perkup.com.ua domain
+// CORS allowed origins
+const allowedOrigins: (string | RegExp)[] = [
+  // Production domain
+  'https://perkup.com.ua',
+  'https://www.perkup.com.ua',
+  /\.perkup\.com\.ua$/,
+  // Railway domains
+  /\.railway\.app$/,
+  /\.up\.railway\.app$/,
+  // Local development
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
+];
+
+// Register CORS
 app.register(cors, {
-  origin: [
-    'https://perkup.com.ua',
-    'https://www.perkup.com.ua',
-    /\.perkup\.com\.ua$/,
-  ],
+  origin: allowedOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
