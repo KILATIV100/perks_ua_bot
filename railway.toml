@@ -1,0 +1,9 @@
+# Railway configuration for PerkUp monorepo
+# Deploy each service separately by setting the Railway service root directory
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
