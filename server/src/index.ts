@@ -64,7 +64,7 @@ const start = async (): Promise<void> => {
   try {
     // Verify database connection on startup
     await prisma.$connect();
-    console.log('✅ Database connected');
+    console.log('Connected to DB successfully');
 
     const port = parseInt(process.env.PORT || '3000', 10);
     const host = '0.0.0.0';
