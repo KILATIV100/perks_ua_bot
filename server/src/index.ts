@@ -13,15 +13,11 @@ const app = Fastify({
   logger: true,
 });
 
-// CORS allowed origins
-const allowedOrigins: (string | RegExp)[] = [
-  // Production domain
+// CORS configuration
+const allowedOrigins = [
+  // Production domains
   'https://perkup.com.ua',
   'https://www.perkup.com.ua',
-  /\.perkup\.com\.ua$/,
-  // Railway domains
-  /\.railway\.app$/,
-  /\.up\.railway\.app$/,
   // Local development
   'http://localhost:5173',
   'http://localhost:3000',
@@ -29,12 +25,43 @@ const allowedOrigins: (string | RegExp)[] = [
   'http://127.0.0.1:3000',
 ];
 
-// Register CORS
+// Pattern-based origins (Railway, subdomains)
+const allowedPatterns = [
+  /^https:\/\/.*\.perkup\.com\.ua$/,
+  /^https:\/\/.*\.railway\.app$/,
+  /^https:\/\/.*\.up\.railway\.app$/,
+];
+
+// Origin validation function
+const isOriginAllowed = (origin: string | undefined): boolean => {
+  if (!origin) return true; // Allow requests without origin (e.g., mobile apps, Postman)
+  if (allowedOrigins.includes(origin)) return true;
+  return allowedPatterns.some(pattern => pattern.test(origin));
+};
+
+// Register CORS with full configuration
 app.register(cors, {
-  origin: allowedOrigins,
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`CORS blocked origin: ${origin}`);
+      callback(null, false);
+    }
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+  ],
+  exposedHeaders: ['Content-Length', 'Content-Type'],
+  maxAge: 86400, // 24 hours - cache preflight requests
+  preflight: true,
+  strictPreflight: false,
 });
 
 // Decorate with Prisma
