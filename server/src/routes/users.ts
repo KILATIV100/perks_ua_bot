@@ -10,6 +10,8 @@ const syncUserSchema = z.object({
 
 const spinSchema = z.object({
   telegramId: z.number(),
+  userLat: z.number(),
+  userLng: z.number(),
 });
 
 // Spin cooldown in milliseconds (24 hours)
@@ -17,6 +19,31 @@ const SPIN_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 // Possible spin rewards
 const SPIN_REWARDS = [5, 10, 15];
+
+// Maximum distance to spin (50 meters)
+const MAX_SPIN_DISTANCE_METERS = 50;
+
+/**
+ * Calculate distance between two coordinates using Haversine formula
+ * @returns Distance in meters
+ */
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000; // Earth's radius in meters
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function toRadians(degrees: number): number {
+  return degrees * (Math.PI / 180);
+}
 
 export async function userRoutes(
   app: FastifyInstance,
@@ -73,7 +100,7 @@ export async function userRoutes(
     try {
       const body = spinSchema.parse(request.body);
 
-      app.log.info(`[Spin Attempt] telegramId: ${body.telegramId}`);
+      app.log.info(`[Spin Attempt] telegramId: ${body.telegramId}, coords: ${body.userLat}, ${body.userLng}`);
 
       // Find user
       const user = await app.prisma.user.findUnique({
@@ -82,6 +109,62 @@ export async function userRoutes(
 
       if (!user) {
         return reply.status(404).send({ error: 'User not found' });
+      }
+
+      // Get all active locations with coordinates
+      const activeLocations = await app.prisma.location.findMany({
+        where: {
+          status: 'active',
+          lat: { not: null },
+          long: { not: null },
+        },
+        select: {
+          id: true,
+          name: true,
+          lat: true,
+          long: true,
+        },
+      });
+
+      // Check if user is within 50m of any active location
+      let nearestLocation: { name: string; distance: number } | null = null;
+      let isNearby = false;
+
+      for (const location of activeLocations) {
+        if (location.lat !== null && location.long !== null) {
+          const distance = calculateDistance(
+            body.userLat,
+            body.userLng,
+            location.lat,
+            location.long
+          );
+
+          app.log.info(`[Distance Check] ${location.name}: ${Math.round(distance)}m`);
+
+          if (!nearestLocation || distance < nearestLocation.distance) {
+            nearestLocation = { name: location.name, distance };
+          }
+
+          if (distance <= MAX_SPIN_DISTANCE_METERS) {
+            isNearby = true;
+            break;
+          }
+        }
+      }
+
+      if (!isNearby) {
+        const distanceInfo = nearestLocation
+          ? `Найближча точка: ${nearestLocation.name} (${Math.round(nearestLocation.distance)}м)`
+          : '';
+
+        app.log.info(`[Spin Denied] telegramId: ${body.telegramId}, too far. ${distanceInfo}`);
+
+        return reply.status(403).send({
+          error: 'TooFar',
+          message: "Бро, ти задалеко. Підходь ближче до кав'ярні, щоб крутнути колесо!",
+          nearestLocation: nearestLocation?.name,
+          distance: nearestLocation ? Math.round(nearestLocation.distance) : null,
+        });
       }
 
       // Check cooldown

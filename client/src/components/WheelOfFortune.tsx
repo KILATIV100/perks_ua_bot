@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react';
+import WebApp from '@twa-dev/sdk';
 
 interface WheelOfFortuneProps {
-  onSpin: () => Promise<{ reward: number; newBalance: number } | null>;
+  onSpin: (lat: number, lng: number) => Promise<{ reward: number; newBalance: number } | { error: string; message: string } | null>;
   canSpin: boolean;
   nextSpinAt: string | null;
   theme: {
@@ -31,6 +32,8 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
   const [rotation, setRotation] = useState(0);
   const [result, setResult] = useState<number | null>(null);
   const [showResult, setShowResult] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [isGettingLocation, setIsGettingLocation] = useState(false);
 
   const formatTimeRemaining = useCallback(() => {
     if (!nextSpinAt) return null;
@@ -46,28 +49,105 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
     return `${hours}г ${minutes}хв`;
   }, [nextSpinAt]);
 
-  const handleSpin = async () => {
-    if (isSpinning || !canSpin) return;
+  const requestLocation = (): Promise<{ lat: number; lng: number }> => {
+    return new Promise((resolve, reject) => {
+      // Try Telegram WebApp location first
+      if (WebApp.LocationManager) {
+        WebApp.LocationManager.init(() => {
+          if (WebApp.LocationManager.isInited && WebApp.LocationManager.isLocationAvailable) {
+            WebApp.LocationManager.getLocation((location) => {
+              if (location) {
+                resolve({ lat: location.latitude, lng: location.longitude });
+              } else {
+                reject(new Error('Не вдалося отримати геопозицію через Telegram'));
+              }
+            });
+          } else {
+            // Fallback to browser geolocation
+            fallbackToNavigatorGeolocation(resolve, reject);
+          }
+        });
+      } else {
+        // Fallback to browser geolocation
+        fallbackToNavigatorGeolocation(resolve, reject);
+      }
+    });
+  };
 
-    setIsSpinning(true);
+  const fallbackToNavigatorGeolocation = (
+    resolve: (value: { lat: number; lng: number }) => void,
+    reject: (reason: Error) => void
+  ) => {
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          });
+        },
+        (error) => {
+          let message = 'Не вдалося отримати геопозицію';
+          if (error.code === error.PERMISSION_DENIED) {
+            message = 'Доступ до геопозиції заборонено. Дозвольте доступ у налаштуваннях.';
+          } else if (error.code === error.POSITION_UNAVAILABLE) {
+            message = 'Геопозиція недоступна. Перевірте GPS.';
+          } else if (error.code === error.TIMEOUT) {
+            message = 'Час очікування геопозиції вичерпано.';
+          }
+          reject(new Error(message));
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0,
+        }
+      );
+    } else {
+      reject(new Error('Ваш браузер не підтримує геолокацію'));
+    }
+  };
+
+  const handleSpin = async () => {
+    if (isSpinning || !canSpin || isGettingLocation) return;
+
+    setLocationError(null);
+    setIsGettingLocation(true);
     setShowResult(false);
     setResult(null);
 
-    // Start spinning animation
-    const spinDegrees = 360 * 5 + Math.random() * 360; // 5 full rotations + random
-    setRotation(prev => prev + spinDegrees);
+    try {
+      // Get user location
+      const location = await requestLocation();
+      setIsGettingLocation(false);
+      setIsSpinning(true);
 
-    // Call API
-    const spinResult = await onSpin();
+      // Start spinning animation
+      const spinDegrees = 360 * 5 + Math.random() * 360;
+      setRotation(prev => prev + spinDegrees);
 
-    // Wait for animation to complete
-    setTimeout(() => {
+      // Call API with coordinates
+      const spinResult = await onSpin(location.lat, location.lng);
+
+      // Wait for animation to complete
+      setTimeout(() => {
+        setIsSpinning(false);
+        if (spinResult && 'reward' in spinResult) {
+          setResult(spinResult.reward);
+          setShowResult(true);
+        } else if (spinResult && 'error' in spinResult) {
+          setLocationError(spinResult.message);
+        }
+      }, 4000);
+    } catch (error) {
+      setIsGettingLocation(false);
       setIsSpinning(false);
-      if (spinResult) {
-        setResult(spinResult.reward);
-        setShowResult(true);
+      if (error instanceof Error) {
+        setLocationError(error.message);
+      } else {
+        setLocationError('Сталася помилка при отриманні геопозиції');
       }
-    }, 4000);
+    }
   };
 
   const timeRemaining = formatTimeRemaining();
@@ -149,10 +229,17 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
         </div>
       )}
 
+      {/* Location error */}
+      {locationError && (
+        <div className="mb-4 p-3 rounded-xl text-center max-w-sm" style={{ backgroundColor: '#FEE2E2' }}>
+          <p className="text-sm text-red-700">{locationError}</p>
+        </div>
+      )}
+
       {/* Spin button */}
       <button
         onClick={handleSpin}
-        disabled={isSpinning || !canSpin}
+        disabled={isSpinning || !canSpin || isGettingLocation}
         className="py-4 px-12 rounded-2xl font-bold text-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
         style={{
           backgroundColor: canSpin ? theme.buttonColor : theme.hintColor,
@@ -160,7 +247,7 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
           boxShadow: canSpin ? '0 4px 15px rgba(139, 90, 43, 0.4)' : 'none',
         }}
       >
-        {isSpinning ? 'Крутиться...' : canSpin ? 'Крутити!' : 'Очікуйте'}
+        {isGettingLocation ? '📍 Визначаємо...' : isSpinning ? 'Крутиться...' : canSpin ? '🎯 Крутити!' : 'Очікуйте'}
       </button>
 
       {/* Cooldown message */}
@@ -176,12 +263,13 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
         style={{ backgroundColor: theme.bgColor }}
       >
         <h3 className="font-semibold mb-2" style={{ color: theme.textColor }}>
-          Правила гри:
+          📍 Правила гри:
         </h3>
         <ul className="text-sm space-y-1" style={{ color: theme.hintColor }}>
-          <li>- Крутіть колесо раз на 24 години</li>
-          <li>- Виграйте 5, 10 або 15 балів</li>
-          <li>- Бали можна обміняти на знижки</li>
+          <li>• Крутіть колесо раз на 24 години</li>
+          <li>• Виграйте 5, 10 або 15 балів</li>
+          <li>• <strong>Будьте поруч з кав'ярнею</strong> (до 50м)</li>
+          <li>• Бали можна обміняти на знижки</li>
         </ul>
       </div>
     </div>

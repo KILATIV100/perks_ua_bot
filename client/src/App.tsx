@@ -190,12 +190,14 @@ function App() {
     WebApp.showAlert(`${userName}, ви обрали: ${location.name}\n\nЗамовлення буде доступне незабаром!`);
   }, [telegramUser]);
 
-  const handleSpin = async (): Promise<{ reward: number; newBalance: number } | null> => {
+  const handleSpin = async (userLat: number, userLng: number): Promise<{ reward: number; newBalance: number } | { error: string; message: string } | null> => {
     if (!telegramUser) return null;
 
     try {
       const response = await api.post<{ reward: number; newBalance: number; nextSpinAt: string }>('/api/user/spin', {
         telegramId: telegramUser.id,
+        userLat,
+        userLng,
       });
 
       setAppUser(prev => prev ? { ...prev, points: response.data.newBalance } : null);
@@ -205,9 +207,15 @@ function App() {
       return { reward: response.data.reward, newBalance: response.data.newBalance };
     } catch (err) {
       console.error('[PerkUp] Spin error:', err);
-      if (axios.isAxiosError(err) && err.response?.status === 429) {
-        setCanSpin(false);
-        setNextSpinAt(err.response.data.nextSpinAt);
+      if (axios.isAxiosError(err)) {
+        if (err.response?.status === 429) {
+          setCanSpin(false);
+          setNextSpinAt(err.response.data.nextSpinAt);
+        }
+        if (err.response?.status === 403) {
+          // Too far from location
+          return { error: err.response.data.error, message: err.response.data.message };
+        }
       }
       return null;
     }
