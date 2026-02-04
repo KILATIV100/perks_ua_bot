@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client';
 import { locationRoutes } from './routes/locations.js';
 import { orderRoutes } from './routes/orders.js';
+import { userRoutes } from './routes/users.js';
 
 // Prisma client - uses DATABASE_URL from environment
 const prisma = new PrismaClient({
@@ -75,6 +76,7 @@ app.get('/health', async (_request, reply) => {
 // Register routes
 app.register(locationRoutes, { prefix: '/api/locations' });
 app.register(orderRoutes, { prefix: '/api/orders' });
+app.register(userRoutes, { prefix: '/api/user' });
 
 // Graceful shutdown
 const gracefulShutdown = async (): Promise<void> => {

@@ -27,13 +27,15 @@ model Location {
 }
 
 model User {
-  id         String   @id @default(uuid())
-  telegramId BigInt   @unique
+  id         String    @id @default(uuid())
+  telegramId BigInt    @unique
   username   String?
   firstName  String?
   lastName   String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  points     Int       @default(0)
+  lastSpin   DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
   orders     Order[]
 
   @@map("users")
