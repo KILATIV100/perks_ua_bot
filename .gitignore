@@ -9,7 +9,7 @@ node_modules/
 .env.*.local
 
 # Build outputs
-# dist/  # Temporarily commented to upload to nic.ua
+dist/
 build/
 .next/
 out/
