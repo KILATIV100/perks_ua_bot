@@ -33,6 +33,9 @@ interface TelegramTheme {
 // API base URL - set VITE_API_URL in Railway environment
 const API_URL = import.meta.env.VITE_API_URL || '';
 
+// Debug: log API URL on load (remove in production)
+console.log('[PerkUp] API_URL:', API_URL || '(empty - using relative path)');
+
 // Axios instance
 const api = axios.create({
   baseURL: API_URL,
