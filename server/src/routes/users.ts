@@ -87,7 +87,7 @@ export async function userRoutes(
         },
       });
     } catch (error) {
-      app.log.error('User sync error:', error);
+      app.log.error({ err: error }, 'User sync error');
       if (error instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Invalid request data', details: error.errors });
       }
@@ -213,7 +213,7 @@ export async function userRoutes(
         nextSpinAt: new Date(now.getTime() + SPIN_COOLDOWN_MS).toISOString(),
       });
     } catch (error) {
-      app.log.error('Spin error:', error);
+      app.log.error({ err: error }, 'Spin error');
       if (error instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Invalid request data', details: error.errors });
       }
@@ -250,7 +250,7 @@ export async function userRoutes(
         },
       });
     } catch (error) {
-      app.log.error('Get user error:', error);
+      app.log.error({ err: error }, 'Get user error');
       return reply.status(500).send({ error: 'Failed to get user' });
     }
   });
