@@ -42,13 +42,10 @@ interface TelegramTheme {
 }
 
 // API base URL - MUST be set for cross-origin requests
-const API_URL = import.meta.env.VITE_API_URL || '';
+// Fallback to production URL if VITE_API_URL is not set
+const API_URL = import.meta.env.VITE_API_URL || 'https://backend-production-5ee9.up.railway.app';
 console.log('[PerkUp] Environment:', import.meta.env.MODE);
-console.log('[PerkUp] API_URL:', API_URL || '(empty - using relative path)');
-console.log('[PerkUp] Current origin:', window.location.origin);
-if (!API_URL) {
-  console.warn('[PerkUp] WARNING: VITE_API_URL is not set! API calls may fail if backend is on different domain.');
-}
+console.log('[PerkUp] API_URL:', API_URL);
 
 // Axios instance
 const api = axios.create({
