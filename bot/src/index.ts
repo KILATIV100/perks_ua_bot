@@ -250,21 +250,36 @@ function markUserNotified(userId: number): void {
 }
 
 /**
- * Get Owner keyboard
+ * Get User keyboard (basic - just WebApp)
  */
-function getOwnerKeyboard(): Keyboard {
+function getUserKeyboard(): Keyboard {
   return new Keyboard()
-    .text('🔍 Перевірити код')
-    .text('👥 Керування адмінами')
+    .webApp('☕️ Відкрити PerkUp', WEB_APP_URL)
     .resized();
 }
 
 /**
- * Get Admin keyboard
+ * Get Admin keyboard (WebApp + verify code)
  */
 function getAdminKeyboard(): Keyboard {
   return new Keyboard()
+    .webApp('☕️ Відкрити PerkUp', WEB_APP_URL)
+    .row()
     .text('🔍 Перевірити код')
+    .resized();
+}
+
+/**
+ * Get Owner keyboard (WebApp + all management buttons)
+ */
+function getOwnerKeyboard(): Keyboard {
+  return new Keyboard()
+    .webApp('☕️ Відкрити PerkUp', WEB_APP_URL)
+    .row()
+    .text('🔍 Перевірити код')
+    .text('📊 Статистика за 24г')
+    .row()
+    .text('👥 Керування адмінами')
     .resized();
 }
 
@@ -281,7 +296,9 @@ bot.command('start', async (ctx) => {
 
   if (isOwner) {
     await ctx.reply(
-      `Привіт, *${firstName}*! 👑\n\nТи власник PerkUp. Використовуй меню нижче для керування.`,
+      `Привіт, *${firstName}*! 👑\n\n` +
+        `Ласкаво просимо до *PerkUp*!\n\n` +
+        `Ти власник — використовуй меню нижче для керування.`,
       {
         parse_mode: 'Markdown',
         reply_markup: getOwnerKeyboard(),
@@ -292,7 +309,9 @@ bot.command('start', async (ctx) => {
 
   if (isAdmin) {
     await ctx.reply(
-      `Привіт, *${firstName}*! 🛡\n\nТи адміністратор PerkUp. Використовуй кнопку нижче для перевірки кодів.`,
+      `Привіт, *${firstName}*! 🛡\n\n` +
+        `Ласкаво просимо до *PerkUp*!\n\n` +
+        `Ти адміністратор — використовуй кнопку нижче для перевірки кодів.`,
       {
         parse_mode: 'Markdown',
         reply_markup: getAdminKeyboard(),
@@ -302,8 +321,6 @@ bot.command('start', async (ctx) => {
   }
 
   // Regular user
-  const keyboard = new InlineKeyboard().webApp('☕ Відкрити PerkUp', WEB_APP_URL);
-
   await ctx.reply(
     `Привіт, ${firstName}! 👋\n\n` +
       `Ласкаво просимо до *PerkUp* — твого помічника у світі кави! ☕\n\n` +
@@ -316,14 +333,20 @@ bot.command('start', async (ctx) => {
       `Натисни кнопку нижче, щоб почати! 👇`,
     {
       parse_mode: 'Markdown',
-      reply_markup: keyboard,
+      reply_markup: getUserKeyboard(),
     }
   );
 });
 
 // Help command
 bot.command('help', async (ctx) => {
-  const keyboard = new InlineKeyboard().webApp('☕ Відкрити PerkUp', WEB_APP_URL);
+  const userId = ctx.from?.id;
+
+  let keyboard = getUserKeyboard();
+  if (userId) {
+    const { isAdmin, isOwner } = await getUserRole(userId);
+    keyboard = isOwner ? getOwnerKeyboard() : isAdmin ? getAdminKeyboard() : getUserKeyboard();
+  }
 
   await ctx.reply(
     `*Як користуватися PerkUp:*\n\n` +
@@ -438,12 +461,48 @@ bot.on('message:text', async (ctx) => {
 
   const { isAdmin, isOwner } = await getUserRole(userId);
 
+  // Handle "Back" button (Owner only) - return to main menu
+  if (text === '⬅️ Назад' && isOwner) {
+    waitingForCode.delete(userId);
+    waitingForAdminId.delete(userId);
+    await ctx.reply('🏠 Головне меню', { reply_markup: getOwnerKeyboard() });
+    return;
+  }
+
   // Handle "Verify Code" button
   if (text === '🔍 Перевірити код' && (isAdmin || isOwner)) {
     waitingForCode.add(userId);
     waitingForAdminId.delete(userId);
     await ctx.reply(
       '🔍 Введи код купону у форматі *XX-00000* (наприклад, CO-77341):',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  // Handle "Stats" button (Owner only)
+  if (text === '📊 Статистика за 24г' && isOwner) {
+    waitingForCode.delete(userId);
+    waitingForAdminId.delete(userId);
+
+    const stats = await getStats(userId);
+
+    if (!stats) {
+      await ctx.reply('❌ Не вдалося отримати статистику. Спробуй пізніше.');
+      return;
+    }
+
+    const generatedTime = new Date(stats.generatedAt).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
+
+    await ctx.reply(
+      `📊 *Статистика за останні 24 години*\n\n` +
+        `👥 Нових користувачів: *${stats.newUsers}*\n` +
+        `🎡 Обертань колеса: *${stats.spins}*\n` +
+        `☕ Безкоштовних напоїв: *${stats.freeDrinks}*\n\n` +
+        `📈 *Загальна статистика:*\n` +
+        `👤 Всього користувачів: *${stats.totalUsers}*\n` +
+        `🪙 Балів в обігу: *${stats.totalPointsInCirculation}*\n\n` +
+        `🕒 Згенеровано: ${generatedTime}`,
       { parse_mode: 'Markdown' }
     );
     return;
@@ -469,11 +528,17 @@ bot.on('message:text', async (ctx) => {
     }
 
     message += 'Щоб *додати* адміна, надішли ID користувача.\n';
-    message += 'Щоб *видалити* адміна, напиши: `видалити ID`';
+    message += 'Щоб *видалити* адміна, напиши: `видалити ID`\n\n';
+    message += 'Натисни *⬅️ Назад* щоб повернутися.';
 
     waitingForAdminId.add(userId);
 
-    await ctx.reply(message, { parse_mode: 'Markdown' });
+    // Show admin management keyboard with back button
+    const adminManagementKeyboard = new Keyboard()
+      .text('⬅️ Назад')
+      .resized();
+
+    await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: adminManagementKeyboard });
     return;
   }
 
@@ -492,6 +557,7 @@ bot.on('message:text', async (ctx) => {
     }
 
     const result = await verifyCode(userId, text);
+    const keyboard = isOwner ? getOwnerKeyboard() : getAdminKeyboard();
 
     if (result.success) {
       await ctx.reply(
@@ -500,10 +566,10 @@ bot.on('message:text', async (ctx) => {
           `Код: \`${text.toUpperCase()}\`\n\n` +
           `💰 Списано 100 балів.\n` +
           `☕ *Видайте напій до 100 грн!*`,
-        { parse_mode: 'Markdown' }
+        { parse_mode: 'Markdown', reply_markup: keyboard }
       );
     } else {
-      await ctx.reply(`❌ ${result.message}`);
+      await ctx.reply(`❌ ${result.message}`, { reply_markup: keyboard });
     }
     return;
   }
@@ -517,7 +583,11 @@ bot.on('message:text', async (ctx) => {
       const result = await setUserRole(userId, targetId, 'USER');
 
       if (result.success) {
-        await ctx.reply(`✅ Адміна з ID \`${targetId}\` видалено.`, { parse_mode: 'Markdown' });
+        waitingForAdminId.delete(userId);
+        await ctx.reply(
+          `✅ Адміна з ID \`${targetId}\` видалено.`,
+          { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+        );
       } else {
         await ctx.reply(`❌ Помилка: ${result.error}`);
       }
@@ -537,7 +607,7 @@ bot.on('message:text', async (ctx) => {
       waitingForAdminId.delete(userId);
       await ctx.reply(
         `✅ Користувача з ID \`${newAdminId}\` призначено адміном!`,
-        { parse_mode: 'Markdown' }
+        { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
       );
     } else {
       await ctx.reply(`❌ Помилка: ${result.error}`);
@@ -545,8 +615,8 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
-  // Default response for regular users
-  const keyboard = new InlineKeyboard().webApp('☕ Відкрити PerkUp', WEB_APP_URL);
+  // Default response - show appropriate keyboard based on role
+  const keyboard = isOwner ? getOwnerKeyboard() : isAdmin ? getAdminKeyboard() : getUserKeyboard();
 
   await ctx.reply(
     `Щоб зробити замовлення, скористайся нашим додатком! 👇\n\n` +
