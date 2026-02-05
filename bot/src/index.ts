@@ -29,6 +29,30 @@ interface VerifyCodeResponse {
   };
 }
 
+interface StatsResponse {
+  period: string;
+  newUsers: number;
+  spins: number;
+  freeDrinks: number;
+  totalUsers: number;
+  totalPointsInCirculation: number;
+  generatedAt: string;
+}
+
+interface ExportResponse {
+  exportedAt: string;
+  totalUsers: number;
+  totalPoints: number;
+  totalSpins: number;
+  users: Array<{
+    telegramId: string;
+    username: string | null;
+    firstName: string | null;
+    points: number;
+    role: string;
+  }>;
+}
+
 // Environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const API_URL = process.env.API_URL || 'https://backend-production-5ee9.up.railway.app';
@@ -148,6 +172,38 @@ async function verifyCode(adminTelegramId: number, code: string): Promise<{ succ
     console.error('[API] Failed to verify code:', error);
     return { success: false, message: 'Помилка з\'єднання з сервером' };
   }
+}
+
+/**
+ * Get 24h stats via API (Owner only)
+ */
+async function getStats(requesterId: number): Promise<StatsResponse | null> {
+  try {
+    const response = await fetch(`${API_URL}/api/admin/stats?requesterId=${requesterId}`);
+    if (response.ok) {
+      const data = (await response.json()) as StatsResponse;
+      return data;
+    }
+  } catch (error) {
+    console.error('[API] Failed to get stats:', error);
+  }
+  return null;
+}
+
+/**
+ * Export users via API (Owner only)
+ */
+async function getExportUsers(requesterId: number): Promise<ExportResponse | null> {
+  try {
+    const response = await fetch(`${API_URL}/api/admin/export-users?requesterId=${requesterId}`);
+    if (response.ok) {
+      const data = (await response.json()) as ExportResponse;
+      return data;
+    }
+  } catch (error) {
+    console.error('[API] Failed to export users:', error);
+  }
+  return null;
 }
 
 /**
@@ -288,6 +344,89 @@ bot.command('help', async (ctx) => {
       reply_markup: keyboard,
     }
   );
+});
+
+// Stats command (Owner only)
+bot.command('stats', async (ctx) => {
+  const userId = ctx.from?.id;
+
+  if (!userId) return;
+
+  const { isOwner } = await getUserRole(userId);
+
+  if (!isOwner) {
+    await ctx.reply('❌ Ця команда доступна тільки для власника.');
+    return;
+  }
+
+  const stats = await getStats(userId);
+
+  if (!stats) {
+    await ctx.reply('❌ Не вдалося отримати статистику. Спробуй пізніше.');
+    return;
+  }
+
+  const generatedTime = new Date(stats.generatedAt).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
+
+  await ctx.reply(
+    `📊 *Статистика за останні 24 години*\n\n` +
+      `👥 Нових користувачів: *${stats.newUsers}*\n` +
+      `🎡 Обертань колеса: *${stats.spins}*\n` +
+      `☕ Безкоштовних напоїв: *${stats.freeDrinks}*\n\n` +
+      `📈 *Загальна статистика:*\n` +
+      `👤 Всього користувачів: *${stats.totalUsers}*\n` +
+      `🪙 Балів в обігу: *${stats.totalPointsInCirculation}*\n\n` +
+      `🕒 Згенеровано: ${generatedTime}`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// Export command (Owner only)
+bot.command('export', async (ctx) => {
+  const userId = ctx.from?.id;
+
+  if (!userId) return;
+
+  const { isOwner } = await getUserRole(userId);
+
+  if (!isOwner) {
+    await ctx.reply('❌ Ця команда доступна тільки для власника.');
+    return;
+  }
+
+  await ctx.reply('⏳ Експортую дані користувачів...');
+
+  const exportData = await getExportUsers(userId);
+
+  if (!exportData) {
+    await ctx.reply('❌ Не вдалося експортувати дані. Спробуй пізніше.');
+    return;
+  }
+
+  const exportedTime = new Date(exportData.exportedAt).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
+
+  // Create summary message
+  let message = `📦 *Експорт користувачів*\n\n` +
+    `👤 Всього: *${exportData.totalUsers}*\n` +
+    `🪙 Балів в обігу: *${exportData.totalPoints}*\n` +
+    `🎡 Всього обертань: *${exportData.totalSpins}*\n\n` +
+    `🕒 Експортовано: ${exportedTime}\n\n`;
+
+  // Add user list (limited to first 20 to avoid message limit)
+  if (exportData.users.length > 0) {
+    message += `*Топ-20 користувачів:*\n`;
+    const topUsers = exportData.users
+      .sort((a, b) => b.points - a.points)
+      .slice(0, 20);
+
+    topUsers.forEach((user, i) => {
+      const name = user.firstName || user.username || `ID: ${user.telegramId}`;
+      const roleIcon = user.role === 'OWNER' ? '👑' : user.role === 'ADMIN' ? '🛡' : '';
+      message += `${i + 1}. ${roleIcon}${name}: *${user.points}* балів\n`;
+    });
+  }
+
+  await ctx.reply(message, { parse_mode: 'Markdown' });
 });
 
 // Handle text messages (including keyboard buttons)

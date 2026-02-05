@@ -4,6 +4,37 @@ import { z } from 'zod';
 // Owner Telegram ID
 const OWNER_TELEGRAM_ID = 7363233852n;
 
+// Telegram Bot API
+const BOT_TOKEN = process.env.BOT_TOKEN;
+
+/**
+ * Send message to Owner via Telegram Bot
+ */
+async function notifyOwner(text: string): Promise<void> {
+  if (!BOT_TOKEN) {
+    console.log('[Telegram] BOT_TOKEN not set, skipping owner notification');
+    return;
+  }
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: OWNER_TELEGRAM_ID.toString(),
+        text,
+        parse_mode: 'Markdown',
+      }),
+    });
+
+    if (!response.ok) {
+      console.log(`[Telegram] Failed to notify owner: ${response.status}`);
+    }
+  } catch (error) {
+    console.log('[Telegram] Error notifying owner:', error);
+  }
+}
+
 // Validation schemas
 const setRoleSchema = z.object({
   requesterId: z.number(), // Who is making the request
@@ -183,6 +214,19 @@ export async function adminRoutes(
 
       app.log.info(`[Code Verified] code: ${body.code}, user: ${redemptionCode.user.telegramId}, verifiedBy: ${body.adminTelegramId}`);
 
+      // Notify Owner about the verification
+      const adminName = admin.firstName || admin.username || `ID: ${body.adminTelegramId}`;
+      const timeStr = now.toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
+      const ownerNotification = `🔔 *Нова видача кави!*\n\n` +
+        `👤 Адмін: ${adminName}\n` +
+        `🎫 Код: \`${body.code}\`\n` +
+        `📉 Списано: 100 балів\n` +
+        `🕒 Час: ${timeStr}`;
+
+      notifyOwner(ownerNotification).catch((err) => {
+        app.log.error({ err }, 'Failed to notify owner');
+      });
+
       return reply.send({
         success: true,
         message: 'Код підтверджено! Списано 100 балів. Видайте напій.',
@@ -193,6 +237,7 @@ export async function adminRoutes(
         },
         code: body.code,
         verifiedAt: now.toISOString(),
+        adminName,
       });
     } catch (error) {
       app.log.error({ err: error }, 'Verify code error');
@@ -200,6 +245,68 @@ export async function adminRoutes(
         return reply.status(400).send({ error: 'Invalid request data', details: error.errors });
       }
       return reply.status(500).send({ error: 'Failed to verify code' });
+    }
+  });
+
+  // GET /api/admin/stats - Get 24h statistics (only for Owner)
+  app.get<{ Querystring: { requesterId: string } }>('/stats', async (request, reply) => {
+    try {
+      const requesterId = BigInt(request.query.requesterId);
+
+      // Check if requester is Owner
+      const requester = await app.prisma.user.findUnique({
+        where: { telegramId: requesterId },
+      });
+
+      if (!requester || requester.role !== 'OWNER') {
+        return reply.status(403).send({ error: 'Access denied. Only Owner can view stats.' });
+      }
+
+      const now = new Date();
+      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+      // Count new users in last 24h
+      const newUsersCount = await app.prisma.user.count({
+        where: {
+          createdAt: { gte: yesterday },
+        },
+      });
+
+      // Count spins in last 24h
+      const spinsCount = await app.prisma.user.count({
+        where: {
+          lastSpin: { gte: yesterday },
+        },
+      });
+
+      // Count verified codes (free drinks) in last 24h
+      const freeDrinksCount = await app.prisma.redemptionCode.count({
+        where: {
+          used: true,
+          usedAt: { gte: yesterday },
+        },
+      });
+
+      // Total users
+      const totalUsers = await app.prisma.user.count();
+
+      // Total points in circulation
+      const pointsAgg = await app.prisma.user.aggregate({
+        _sum: { points: true },
+      });
+
+      return reply.send({
+        period: '24h',
+        newUsers: newUsersCount,
+        spins: spinsCount,
+        freeDrinks: freeDrinksCount,
+        totalUsers,
+        totalPointsInCirculation: pointsAgg._sum.points || 0,
+        generatedAt: now.toISOString(),
+      });
+    } catch (error) {
+      app.log.error({ err: error }, 'Stats error');
+      return reply.status(500).send({ error: 'Failed to get stats' });
     }
   });
 
@@ -221,6 +328,56 @@ export async function adminRoutes(
     } catch (error) {
       app.log.error({ err: error }, 'Check role error');
       return reply.status(500).send({ error: 'Failed to check role' });
+    }
+  });
+
+  // GET /api/admin/export-users - Export all users (only for Owner)
+  app.get<{ Querystring: { requesterId: string } }>('/export-users', async (request, reply) => {
+    try {
+      const requesterId = BigInt(request.query.requesterId);
+
+      // Check if requester is Owner
+      const requester = await app.prisma.user.findUnique({
+        where: { telegramId: requesterId },
+      });
+
+      if (!requester || requester.role !== 'OWNER') {
+        return reply.status(403).send({ error: 'Access denied. Only Owner can export users.' });
+      }
+
+      // Fetch all users
+      const users = await app.prisma.user.findMany({
+        select: {
+          id: true,
+          telegramId: true,
+          username: true,
+          firstName: true,
+          lastName: true,
+          points: true,
+          totalSpins: true,
+          role: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      // Convert BigInt to string for JSON serialization
+      const exportData = users.map((user) => ({
+        ...user,
+        telegramId: user.telegramId.toString(),
+      }));
+
+      return reply.send({
+        exportedAt: new Date().toISOString(),
+        totalUsers: exportData.length,
+        totalPoints: exportData.reduce((sum, u) => sum + u.points, 0),
+        totalSpins: exportData.reduce((sum, u) => sum + u.totalSpins, 0),
+        users: exportData,
+      });
+    } catch (error) {
+      app.log.error({ err: error }, 'Export users error');
+      return reply.status(500).send({ error: 'Failed to export users' });
     }
   });
 }
