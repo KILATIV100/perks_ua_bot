@@ -193,9 +193,9 @@ function App() {
   const handleSpin = async (userLat?: number, userLng?: number): Promise<{ reward: number; newBalance: number } | { error: string; message: string } | null> => {
     if (!telegramUser) return null;
 
-    // Check for dev mode in URL
+    // Check for dev/admin mode in URL
     const urlParams = new URLSearchParams(window.location.search);
-    const devMode = urlParams.get('dev') === 'true';
+    const devMode = urlParams.get('dev') === 'true' || urlParams.get('admin') === 'true';
 
     try {
       const response = await api.post<{ reward: number; newBalance: number; nextSpinAt: string }>('/api/user/spin', {

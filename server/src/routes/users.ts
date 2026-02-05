@@ -1,6 +1,37 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
 
+// Telegram Bot API
+const BOT_TOKEN = process.env.BOT_TOKEN;
+
+/**
+ * Send message to user via Telegram Bot
+ */
+async function sendTelegramMessage(chatId: number, text: string): Promise<void> {
+  if (!BOT_TOKEN) {
+    console.log('[Telegram] BOT_TOKEN not set, skipping notification');
+    return;
+  }
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'Markdown',
+      }),
+    });
+
+    if (!response.ok) {
+      console.log(`[Telegram] Failed to send message: ${response.status}`);
+    }
+  } catch (error) {
+    console.log('[Telegram] Error sending message:', error);
+  }
+}
+
 // Validation schemas
 const syncUserSchema = z.object({
   telegramId: z.number(),
@@ -73,6 +104,7 @@ export async function userRoutes(
           username: body.username,
           firstName: body.firstName,
           points: 0,
+          totalSpins: 0,
         },
         select: {
           id: true,
@@ -80,6 +112,7 @@ export async function userRoutes(
           username: true,
           firstName: true,
           points: true,
+          totalSpins: true,
           lastSpin: true,
           createdAt: true,
         },
@@ -220,17 +253,29 @@ export async function userRoutes(
         where: { telegramId: BigInt(body.telegramId) },
         data: {
           points: { increment: reward },
+          totalSpins: { increment: 1 },
           lastSpin: now,
         },
         select: {
           id: true,
           telegramId: true,
           points: true,
+          totalSpins: true,
           lastSpin: true,
+          firstName: true,
         },
       });
 
-      app.log.info(`[Spin Success] telegramId: ${body.telegramId}, reward: ${reward}, total: ${updatedUser.points}`);
+      app.log.info(`[Spin Success] telegramId: ${body.telegramId}, reward: ${reward}, total: ${updatedUser.points}, spins: ${updatedUser.totalSpins}`);
+
+      // Send notification via Telegram bot
+      const userName = updatedUser.firstName || 'Друже';
+      const message = `🎉 *${userName}, вітаємо!*\n\nТи виграв *${reward} балів* на Колесі Фортуни!\n\n💰 Твій баланс: *${updatedUser.points}* балів\n🎡 Всього обертань: *${updatedUser.totalSpins}*`;
+
+      // Send async, don't wait for it
+      sendTelegramMessage(body.telegramId, message).catch((err) => {
+        app.log.error({ err }, 'Failed to send spin notification');
+      });
 
       return reply.send({
         success: true,
@@ -260,6 +305,7 @@ export async function userRoutes(
           username: true,
           firstName: true,
           points: true,
+          totalSpins: true,
           lastSpin: true,
           createdAt: true,
         },

@@ -15,10 +15,10 @@ interface WheelOfFortuneProps {
   };
 }
 
-// Check for dev mode in URL
+// Check for dev/admin mode in URL
 const isDevMode = () => {
   const urlParams = new URLSearchParams(window.location.search);
-  return urlParams.get('dev') === 'true';
+  return urlParams.get('dev') === 'true' || urlParams.get('admin') === 'true';
 };
 
 // Wheel segments with colors

@@ -33,6 +33,7 @@ model User {
   firstName  String?
   lastName   String?
   points     Int       @default(0)
+  totalSpins Int       @default(0)
   lastSpin   DateTime?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
