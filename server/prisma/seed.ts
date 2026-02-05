@@ -13,22 +13,22 @@ interface LocationSeed {
 const locations: LocationSeed[] = [
   {
     name: 'Mark Mall',
-    lat: 50.5173,
-    long: 30.7932,
+    lat: 50.51485367479439,
+    long: 30.78219892858682,
     address: 'ТРЦ Mark Mall, Бровари',
     status: 'active',
   },
   {
     name: 'Парк "Приозерний"',
-    lat: 50.5225,
-    long: 30.7780,
+    lat: 50.50128659421246,
+    long: 30.754029265863245,
     address: 'Парк Приозерний, Бровари',
     status: 'active',
   },
   {
     name: 'ЖК "Лісовий квартал"',
-    lat: 50.5132,
-    long: 30.7950,
+    lat: 50.51758555255138,
+    long: 30.783235338021694,
     address: 'ЖК Лісовий квартал, Бровари',
     status: 'coming_soon',
   },
