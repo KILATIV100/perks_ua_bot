@@ -96,9 +96,15 @@ export async function userRoutes(
   // POST /api/user/sync - Sync user data from Telegram
   app.post('/sync', async (request, reply) => {
     try {
+      console.log('[SYNC] Raw body:', JSON.stringify(request.body));
+
       const body = syncUserSchema.parse(request.body);
 
-      app.log.info(`[User Sync] telegramId: ${body.telegramId}, username: ${body.username || 'N/A'}`);
+      console.log('[SYNC] Parsed data:', {
+        telegramId: body.telegramId,
+        username: body.username || 'N/A',
+        firstName: body.firstName || 'N/A',
+      });
 
       const user = await app.prisma.user.upsert({
         where: { telegramId: BigInt(body.telegramId) },
@@ -121,8 +127,17 @@ export async function userRoutes(
           points: true,
           totalSpins: true,
           lastSpin: true,
+          role: true,
           createdAt: true,
         },
+      });
+
+      console.log('[SYNC] User synced:', {
+        id: user.id,
+        telegramId: user.telegramId.toString(),
+        firstName: user.firstName,
+        points: user.points,
+        role: user.role,
       });
 
       // Convert BigInt to string for JSON serialization
@@ -133,6 +148,7 @@ export async function userRoutes(
         },
       });
     } catch (error) {
+      console.error('[SYNC] Error:', error);
       app.log.error({ err: error }, 'User sync error');
       if (error instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Invalid request data', details: error.errors });

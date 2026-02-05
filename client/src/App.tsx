@@ -41,9 +41,14 @@ interface TelegramTheme {
   secondaryBgColor: string;
 }
 
-// API base URL
+// API base URL - MUST be set for cross-origin requests
 const API_URL = import.meta.env.VITE_API_URL || '';
+console.log('[PerkUp] Environment:', import.meta.env.MODE);
 console.log('[PerkUp] API_URL:', API_URL || '(empty - using relative path)');
+console.log('[PerkUp] Current origin:', window.location.origin);
+if (!API_URL) {
+  console.warn('[PerkUp] WARNING: VITE_API_URL is not set! API calls may fail if backend is on different domain.');
+}
 
 // Axios instance
 const api = axios.create({
@@ -67,23 +72,62 @@ function useTelegramTheme(): TelegramTheme {
   }, []);
 }
 
-// Get Telegram user data
-function useTelegramUser(): TelegramUser | null {
-  return useMemo(() => {
-    console.log('[PerkUp] WebApp.initDataUnsafe:', WebApp.initDataUnsafe);
-    const user = WebApp.initDataUnsafe?.user;
-    if (!user) {
-      console.warn('[PerkUp] No user data from Telegram WebApp');
-      return null;
-    }
-    console.log('[PerkUp] Telegram user:', user);
-    return {
-      id: user.id,
-      firstName: user.first_name || 'Гість',
-      lastName: user.last_name,
-      username: user.username,
+// Get Telegram user data with retry logic
+function useTelegramUser(): { user: TelegramUser | null; isReady: boolean } {
+  const [user, setUser] = useState<TelegramUser | null>(null);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    const getTelegramUser = (): TelegramUser | null => {
+      console.log('[PerkUp] Checking WebApp.initDataUnsafe:', WebApp.initDataUnsafe);
+      console.log('[PerkUp] WebApp.initData:', WebApp.initData);
+
+      const userData = WebApp.initDataUnsafe?.user;
+      if (!userData) {
+        console.warn('[PerkUp] No user data from Telegram WebApp');
+        return null;
+      }
+
+      console.log('[PerkUp] Telegram user found:', userData);
+      return {
+        id: userData.id,
+        firstName: userData.first_name || 'Гість',
+        lastName: userData.last_name,
+        username: userData.username,
+      };
     };
+
+    // Try immediately
+    const immediateUser = getTelegramUser();
+    if (immediateUser) {
+      setUser(immediateUser);
+      setIsReady(true);
+      return;
+    }
+
+    // If not available, retry after delay (WebApp SDK might need time to initialize)
+    console.log('[PerkUp] User not available, retrying in 500ms...');
+    const timer1 = setTimeout(() => {
+      const retryUser = getTelegramUser();
+      if (retryUser) {
+        setUser(retryUser);
+        setIsReady(true);
+      } else {
+        // Final retry after another 500ms
+        console.log('[PerkUp] Still no user, final retry in 500ms...');
+        const timer2 = setTimeout(() => {
+          const finalUser = getTelegramUser();
+          setUser(finalUser);
+          setIsReady(true);
+        }, 500);
+        return () => clearTimeout(timer2);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer1);
   }, []);
+
+  return { user, isReady };
 }
 
 // Points required for redemption
@@ -104,7 +148,7 @@ function App() {
   const [showConfetti, setShowConfetti] = useState(false);
 
   const theme = useTelegramTheme();
-  const telegramUser = useTelegramUser();
+  const { user: telegramUser, isReady: isTelegramReady } = useTelegramUser();
 
   // Initialize Telegram WebApp
   useEffect(() => {
@@ -114,12 +158,15 @@ function App() {
     WebApp.setBackgroundColor(theme.secondaryBgColor);
   }, [theme]);
 
-  // Sync user with backend
+  // Sync user with backend when Telegram data is ready
   useEffect(() => {
-    if (telegramUser) {
+    if (isTelegramReady && telegramUser) {
+      console.log('[PerkUp] Telegram ready, syncing user...');
       syncUser();
+    } else if (isTelegramReady && !telegramUser) {
+      console.warn('[PerkUp] Telegram ready but no user data - running outside Telegram?');
     }
-  }, [telegramUser]);
+  }, [isTelegramReady, telegramUser]);
 
   // Fetch locations
   useEffect(() => {
