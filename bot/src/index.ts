@@ -14,9 +14,9 @@ const bot = new Bot(BOT_TOKEN);
 
 // PerkUp locations in Brovary
 const LOCATIONS = [
-  { name: 'Mark Mall', lat: 50.5173, lng: 30.7932 },
-  { name: 'Парк "Приозерний"', lat: 50.5225, lng: 30.7780 },
-  { name: 'ЖК "Лісовий квартал"', lat: 50.5132, lng: 30.7950 },
+  { name: 'Mark Mall', lat: 50.51485367479439, lng: 30.78219892858682 },
+  { name: 'Парк "Приозерний"', lat: 50.50128659421246, lng: 30.754029265863245 },
+  { name: 'ЖК "Лісовий квартал"', lat: 50.51758555255138, lng: 30.783235338021694 },
 ];
 
 // Notification radius in meters (500m)
