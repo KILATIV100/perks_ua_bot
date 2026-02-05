@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import WebApp from '@twa-dev/sdk';
 
 interface WheelOfFortuneProps {
-  onSpin: (lat: number, lng: number) => Promise<{ reward: number; newBalance: number } | { error: string; message: string } | null>;
+  onSpin: (lat?: number, lng?: number) => Promise<{ reward: number; newBalance: number } | { error: string; message: string } | null>;
   canSpin: boolean;
   nextSpinAt: string | null;
   theme: {
@@ -14,6 +14,12 @@ interface WheelOfFortuneProps {
     secondaryBgColor: string;
   };
 }
+
+// Check for dev mode in URL
+const isDevMode = () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  return urlParams.get('dev') === 'true';
+};
 
 // Wheel segments with colors
 const SEGMENTS = [
@@ -112,42 +118,50 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
     if (isSpinning || !canSpin || isGettingLocation) return;
 
     setLocationError(null);
-    setIsGettingLocation(true);
     setShowResult(false);
     setResult(null);
 
-    try {
-      // Get user location
-      const location = await requestLocation();
-      setIsGettingLocation(false);
-      setIsSpinning(true);
+    const devMode = isDevMode();
+    let location: { lat: number; lng: number } | null = null;
 
-      // Start spinning animation
-      const spinDegrees = 360 * 5 + Math.random() * 360;
-      setRotation(prev => prev + spinDegrees);
-
-      // Call API with coordinates
-      const spinResult = await onSpin(location.lat, location.lng);
-
-      // Wait for animation to complete
-      setTimeout(() => {
-        setIsSpinning(false);
-        if (spinResult && 'reward' in spinResult) {
-          setResult(spinResult.reward);
-          setShowResult(true);
-        } else if (spinResult && 'error' in spinResult) {
-          setLocationError(spinResult.message);
+    // Skip location request in dev mode
+    if (!devMode) {
+      setIsGettingLocation(true);
+      try {
+        location = await requestLocation();
+      } catch (error) {
+        setIsGettingLocation(false);
+        if (error instanceof Error) {
+          setLocationError(error.message);
+        } else {
+          setLocationError('Сталася помилка при отриманні геопозиції');
         }
-      }, 4000);
-    } catch (error) {
-      setIsGettingLocation(false);
-      setIsSpinning(false);
-      if (error instanceof Error) {
-        setLocationError(error.message);
-      } else {
-        setLocationError('Сталася помилка при отриманні геопозиції');
+        return;
       }
+      setIsGettingLocation(false);
+    } else {
+      console.log('[Dev Mode] Skipping geolocation check');
     }
+
+    setIsSpinning(true);
+
+    // Start spinning animation
+    const spinDegrees = 360 * 5 + Math.random() * 360;
+    setRotation(prev => prev + spinDegrees);
+
+    // Call API with or without coordinates
+    const spinResult = await onSpin(location?.lat, location?.lng);
+
+    // Wait for animation to complete
+    setTimeout(() => {
+      setIsSpinning(false);
+      if (spinResult && 'reward' in spinResult) {
+        setResult(spinResult.reward);
+        setShowResult(true);
+      } else if (spinResult && 'error' in spinResult) {
+        setLocationError(spinResult.message);
+      }
+    }, 4000);
   };
 
   const timeRemaining = formatTimeRemaining();
@@ -257,6 +271,13 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
         </p>
       )}
 
+      {/* Dev Mode indicator */}
+      {isDevMode() && (
+        <div className="mb-4 p-2 rounded-lg text-center" style={{ backgroundColor: '#E0F2FE' }}>
+          <p className="text-sm text-blue-700 font-medium">🛠 Dev Mode: геолокація вимкнена</p>
+        </div>
+      )}
+
       {/* Rules */}
       <div
         className="mt-8 p-4 rounded-xl w-full max-w-sm"
@@ -268,7 +289,7 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
         <ul className="text-sm space-y-1" style={{ color: theme.hintColor }}>
           <li>• Крутіть колесо раз на 24 години</li>
           <li>• Виграйте 5, 10 або 15 балів</li>
-          <li>• <strong>Будьте поруч з кав'ярнею</strong> (до 50м)</li>
+          {!isDevMode() && <li>• <strong>Будьте поруч з кав'ярнею</strong> (до 50м)</li>}
           <li>• Бали можна обміняти на знижки</li>
         </ul>
       </div>

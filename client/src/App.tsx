@@ -190,14 +190,19 @@ function App() {
     WebApp.showAlert(`${userName}, ви обрали: ${location.name}\n\nЗамовлення буде доступне незабаром!`);
   }, [telegramUser]);
 
-  const handleSpin = async (userLat: number, userLng: number): Promise<{ reward: number; newBalance: number } | { error: string; message: string } | null> => {
+  const handleSpin = async (userLat?: number, userLng?: number): Promise<{ reward: number; newBalance: number } | { error: string; message: string } | null> => {
     if (!telegramUser) return null;
+
+    // Check for dev mode in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const devMode = urlParams.get('dev') === 'true';
 
     try {
       const response = await api.post<{ reward: number; newBalance: number; nextSpinAt: string }>('/api/user/spin', {
         telegramId: telegramUser.id,
         userLat,
         userLng,
+        devMode,
       });
 
       setAppUser(prev => prev ? { ...prev, points: response.data.newBalance } : null);

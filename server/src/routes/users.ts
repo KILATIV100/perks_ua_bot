@@ -10,8 +10,9 @@ const syncUserSchema = z.object({
 
 const spinSchema = z.object({
   telegramId: z.number(),
-  userLat: z.number(),
-  userLng: z.number(),
+  userLat: z.number().optional(),
+  userLng: z.number().optional(),
+  devMode: z.boolean().optional(),
 });
 
 // Spin cooldown in milliseconds (24 hours)
@@ -22,6 +23,11 @@ const SPIN_REWARDS = [5, 10, 15];
 
 // Maximum distance to spin (50 meters)
 const MAX_SPIN_DISTANCE_METERS = 50;
+
+// Dev mode: bypass geolocation check for these telegram IDs
+const DEV_TELEGRAM_IDS = [
+  7363233852, // Owner/Developer
+];
 
 /**
  * Calculate distance between two coordinates using Haversine formula
@@ -111,60 +117,80 @@ export async function userRoutes(
         return reply.status(404).send({ error: 'User not found' });
       }
 
-      // Get all active locations with coordinates
-      const activeLocations = await app.prisma.location.findMany({
-        where: {
-          status: 'active',
-          lat: { not: null },
-          long: { not: null },
-        },
-        select: {
-          id: true,
-          name: true,
-          lat: true,
-          long: true,
-        },
-      });
+      // Check if dev mode is enabled (bypass geolocation)
+      const isDevUser = DEV_TELEGRAM_IDS.includes(body.telegramId);
+      const isDevMode = body.devMode === true;
+      const bypassGeoCheck = isDevUser || isDevMode;
 
-      // Check if user is within 50m of any active location
-      let nearestLocation: { name: string; distance: number } | null = null;
-      let isNearby = false;
-
-      for (const location of activeLocations) {
-        if (location.lat !== null && location.long !== null) {
-          const distance = calculateDistance(
-            body.userLat,
-            body.userLng,
-            location.lat,
-            location.long
-          );
-
-          app.log.info(`[Distance Check] ${location.name}: ${Math.round(distance)}m`);
-
-          if (!nearestLocation || distance < nearestLocation.distance) {
-            nearestLocation = { name: location.name, distance };
-          }
-
-          if (distance <= MAX_SPIN_DISTANCE_METERS) {
-            isNearby = true;
-            break;
-          }
-        }
+      if (bypassGeoCheck) {
+        app.log.info(`[Dev Mode] telegramId: ${body.telegramId}, bypassing geolocation check (isDevUser: ${isDevUser}, devMode: ${isDevMode})`);
       }
 
-      if (!isNearby) {
-        const distanceInfo = nearestLocation
-          ? `Найближча точка: ${nearestLocation.name} (${Math.round(nearestLocation.distance)}м)`
-          : '';
+      // Only check geolocation if not in dev mode
+      if (!bypassGeoCheck) {
+        // Require coordinates if not in dev mode
+        if (body.userLat === undefined || body.userLng === undefined) {
+          return reply.status(400).send({
+            error: 'NoLocation',
+            message: 'Щоб крутнути колесо, потрібно надати доступ до геолокації.',
+          });
+        }
 
-        app.log.info(`[Spin Denied] telegramId: ${body.telegramId}, too far. ${distanceInfo}`);
-
-        return reply.status(403).send({
-          error: 'TooFar',
-          message: "Бро, ти задалеко. Підходь ближче до кав'ярні, щоб крутнути колесо!",
-          nearestLocation: nearestLocation?.name,
-          distance: nearestLocation ? Math.round(nearestLocation.distance) : null,
+        // Get all active locations with coordinates
+        const activeLocations = await app.prisma.location.findMany({
+          where: {
+            status: 'active',
+            lat: { not: null },
+            long: { not: null },
+          },
+          select: {
+            id: true,
+            name: true,
+            lat: true,
+            long: true,
+          },
         });
+
+        // Check if user is within 50m of any active location
+        let nearestLocation: { name: string; distance: number } | null = null;
+        let isNearby = false;
+
+        for (const location of activeLocations) {
+          if (location.lat !== null && location.long !== null) {
+            const distance = calculateDistance(
+              body.userLat,
+              body.userLng,
+              location.lat,
+              location.long
+            );
+
+            app.log.info(`[Distance Check] ${location.name}: ${Math.round(distance)}m`);
+
+            if (!nearestLocation || distance < nearestLocation.distance) {
+              nearestLocation = { name: location.name, distance };
+            }
+
+            if (distance <= MAX_SPIN_DISTANCE_METERS) {
+              isNearby = true;
+              break;
+            }
+          }
+        }
+
+        if (!isNearby) {
+          const distanceInfo = nearestLocation
+            ? `Найближча точка: ${nearestLocation.name} (${Math.round(nearestLocation.distance)}м)`
+            : '';
+
+          app.log.info(`[Spin Denied] telegramId: ${body.telegramId}, too far. ${distanceInfo}`);
+
+          return reply.status(403).send({
+            error: 'TooFar',
+            message: "Бро, ти задалеко. Підходь ближче до кав'ярні, щоб крутнути колесо!",
+            nearestLocation: nearestLocation?.name,
+            distance: nearestLocation ? Math.round(nearestLocation.distance) : null,
+          });
+        }
       }
 
       // Check cooldown
