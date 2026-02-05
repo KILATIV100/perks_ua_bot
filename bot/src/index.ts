@@ -250,32 +250,29 @@ function markUserNotified(userId: number): void {
 }
 
 /**
- * Get User keyboard (basic - just WebApp)
+ * Get User keyboard (basic - no WebApp, users use Menu Button instead)
+ * WebApp via Keyboard doesn't pass initData correctly on some Telegram versions
  */
-function getUserKeyboard(): Keyboard {
-  return new Keyboard()
-    .webApp('☕️ Відкрити PerkUp', WEB_APP_URL)
-    .resized();
+function getUserKeyboard(): Keyboard | undefined {
+  // Regular users should use the Menu Button (configured in BotFather)
+  // which correctly passes initData to the Mini App
+  return undefined;
 }
 
 /**
- * Get Admin keyboard (WebApp + verify code)
+ * Get Admin keyboard (verify code only, WebApp via Menu Button)
  */
 function getAdminKeyboard(): Keyboard {
   return new Keyboard()
-    .webApp('☕️ Відкрити PerkUp', WEB_APP_URL)
-    .row()
     .text('🔍 Перевірити код')
     .resized();
 }
 
 /**
- * Get Owner keyboard (WebApp + all management buttons)
+ * Get Owner keyboard (all management buttons, WebApp via Menu Button)
  */
 function getOwnerKeyboard(): Keyboard {
   return new Keyboard()
-    .webApp('☕️ Відкрити PerkUp', WEB_APP_URL)
-    .row()
     .text('🔍 Перевірити код')
     .text('📊 Статистика за 24г')
     .row()
@@ -320,7 +317,7 @@ bot.command('start', async (ctx) => {
     return;
   }
 
-  // Regular user
+  // Regular user - use Menu Button for WebApp (no custom keyboard)
   await ctx.reply(
     `Привіт, ${firstName}! 👋\n\n` +
       `Ласкаво просимо до *PerkUp* — твого помічника у світі кави! ☕\n\n` +
@@ -330,10 +327,10 @@ bot.command('start', async (ctx) => {
       `• Накопичувати бонуси\n` +
       `• Крутити Колесо Фортуни 🎡\n\n` +
       `📍 *Надішли Live Location* (транслювати геолокацію) — і ми автоматично повідомимо, коли будеш поруч з кав'ярнею!\n\n` +
-      `Натисни кнопку нижче, щоб почати! 👇`,
+      `Натисни кнопку *PerkUP* зліва від поля вводу, щоб почати! 👇`,
     {
       parse_mode: 'Markdown',
-      reply_markup: getUserKeyboard(),
+      reply_markup: { remove_keyboard: true },
     }
   );
 });
@@ -342,15 +339,15 @@ bot.command('start', async (ctx) => {
 bot.command('help', async (ctx) => {
   const userId = ctx.from?.id;
 
-  let keyboard = getUserKeyboard();
+  let keyboard: Keyboard | { remove_keyboard: true } | undefined;
   if (userId) {
     const { isAdmin, isOwner } = await getUserRole(userId);
-    keyboard = isOwner ? getOwnerKeyboard() : isAdmin ? getAdminKeyboard() : getUserKeyboard();
+    keyboard = isOwner ? getOwnerKeyboard() : isAdmin ? getAdminKeyboard() : { remove_keyboard: true as const };
   }
 
   await ctx.reply(
     `*Як користуватися PerkUp:*\n\n` +
-      `1️⃣ Натисни кнопку "Відкрити PerkUp"\n` +
+      `1️⃣ Натисни кнопку *PerkUP* зліва від поля вводу\n` +
       `2️⃣ Обери локацію кав'ярні\n` +
       `3️⃣ Переглянь меню та зроби замовлення\n` +
       `4️⃣ Отримай сповіщення, коли замовлення готове\n\n` +
@@ -616,12 +613,16 @@ bot.on('message:text', async (ctx) => {
   }
 
   // Default response - show appropriate keyboard based on role
-  const keyboard = isOwner ? getOwnerKeyboard() : isAdmin ? getAdminKeyboard() : getUserKeyboard();
+  const keyboard: Keyboard | { remove_keyboard: true } = isOwner
+    ? getOwnerKeyboard()
+    : isAdmin
+      ? getAdminKeyboard()
+      : { remove_keyboard: true as const };
 
   await ctx.reply(
-    `Щоб зробити замовлення, скористайся нашим додатком! 👇\n\n` +
+    `Щоб зробити замовлення, натисни кнопку *PerkUP* зліва від поля вводу! 👇\n\n` +
       `📍 Або надішли свою геолокацію, щоб дізнатися відстань до найближчої кав'ярні.`,
-    { reply_markup: keyboard }
+    { parse_mode: 'Markdown', reply_markup: keyboard }
   );
 });
 
