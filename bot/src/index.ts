@@ -22,6 +22,12 @@ const LOCATIONS = [
 // Notification radius in meters (500m)
 const NOTIFICATION_RADIUS = 500;
 
+// Store last notification time per user to avoid spam (userId -> timestamp)
+const lastNotificationTime = new Map<number, number>();
+
+// Minimum time between notifications (15 minutes)
+const NOTIFICATION_COOLDOWN_MS = 15 * 60 * 1000;
+
 // Random notification messages
 const PROXIMITY_MESSAGES = [
   "Відчуваєш цей аромат? ☕️ Ти всього в 5 хвилинах від ідеального капучино. Заходь!",
@@ -130,18 +136,43 @@ bot.command('help', async (ctx) => {
   );
 });
 
-// Handle location messages
-bot.on('message:location', async (ctx) => {
-  const { latitude, longitude } = ctx.message.location;
+/**
+ * Check if user can receive notification (cooldown check)
+ */
+function canNotifyUser(userId: number): boolean {
+  const lastTime = lastNotificationTime.get(userId);
+  if (!lastTime) return true;
+  return Date.now() - lastTime >= NOTIFICATION_COOLDOWN_MS;
+}
+
+/**
+ * Mark user as notified
+ */
+function markUserNotified(userId: number): void {
+  lastNotificationTime.set(userId, Date.now());
+}
+
+/**
+ * Handle location (both regular and live)
+ */
+async function handleLocation(
+  ctx: { from?: { id: number; first_name?: string }; reply: Function },
+  latitude: number,
+  longitude: number,
+  isLiveLocation: boolean = false
+): Promise<void> {
   const user = ctx.from;
+  const userId = user?.id;
   const firstName = user?.first_name || 'друже';
 
-  console.log(`[Location] User ${user?.id} (${firstName}): ${latitude}, ${longitude}`);
+  console.log(`[${isLiveLocation ? 'Live Location' : 'Location'}] User ${userId} (${firstName}): ${latitude}, ${longitude}`);
 
   const nearest = findNearestLocation(latitude, longitude);
 
   if (!nearest) {
-    await ctx.reply('Не вдалося визначити найближчу локацію. Спробуй пізніше!');
+    if (!isLiveLocation) {
+      await ctx.reply('Не вдалося визначити найближчу локацію. Спробуй пізніше!');
+    }
     return;
   }
 
@@ -150,8 +181,27 @@ bot.on('message:location', async (ctx) => {
     WEB_APP_URL
   );
 
+  // For live location updates, only notify when nearby and respect cooldown
+  if (isLiveLocation) {
+    if (nearest.distance <= NOTIFICATION_RADIUS && userId && canNotifyUser(userId)) {
+      const randomMessage = getRandomMessage();
+      markUserNotified(userId);
+
+      await ctx.reply(
+        `🔔 *Ти поруч з ${nearest.name}!*\n\n` +
+          `${randomMessage}`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: keyboard,
+        }
+      );
+    }
+    // Don't spam for live location updates when far away
+    return;
+  }
+
+  // Regular location message - always respond
   if (nearest.distance <= NOTIFICATION_RADIUS) {
-    // User is nearby - send random notification
     const randomMessage = getRandomMessage();
 
     await ctx.reply(
@@ -163,7 +213,6 @@ bot.on('message:location', async (ctx) => {
       }
     );
   } else if (nearest.distance <= 2000) {
-    // User is within 2km
     await ctx.reply(
       `📍 Найближча кав'ярня: *${nearest.name}*\n` +
         `Відстань: ${Math.round(nearest.distance)} метрів\n\n` +
@@ -174,7 +223,6 @@ bot.on('message:location', async (ctx) => {
       }
     );
   } else {
-    // User is far away
     const distanceKm = (nearest.distance / 1000).toFixed(1);
     await ctx.reply(
       `📍 Найближча кав'ярня: *${nearest.name}*\n` +
@@ -186,6 +234,23 @@ bot.on('message:location', async (ctx) => {
       }
     );
   }
+}
+
+// Handle regular location messages
+bot.on('message:location', async (ctx) => {
+  const { latitude, longitude, live_period } = ctx.message.location;
+  const isLiveLocation = live_period !== undefined;
+
+  await handleLocation(ctx, latitude, longitude, isLiveLocation);
+});
+
+// Handle live location updates (when user moves)
+bot.on('edited_message:location', async (ctx) => {
+  const location = ctx.editedMessage?.location;
+  if (!location) return;
+
+  const { latitude, longitude } = location;
+  await handleLocation(ctx, latitude, longitude, true);
 });
 
 // Handle any text message
