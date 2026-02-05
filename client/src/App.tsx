@@ -70,11 +70,16 @@ function useTelegramTheme(): TelegramTheme {
 // Get Telegram user data
 function useTelegramUser(): TelegramUser | null {
   return useMemo(() => {
+    console.log('[PerkUp] WebApp.initDataUnsafe:', WebApp.initDataUnsafe);
     const user = WebApp.initDataUnsafe?.user;
-    if (!user) return null;
+    if (!user) {
+      console.warn('[PerkUp] No user data from Telegram WebApp');
+      return null;
+    }
+    console.log('[PerkUp] Telegram user:', user);
     return {
       id: user.id,
-      firstName: user.first_name,
+      firstName: user.first_name || 'Гість',
       lastName: user.last_name,
       username: user.username,
     };
@@ -138,17 +143,32 @@ function App() {
   }, [activeTab, selectedLocation, theme]);
 
   const syncUser = async () => {
-    if (!telegramUser) return;
+    if (!telegramUser) {
+      console.warn('[PerkUp] syncUser called but telegramUser is null');
+      return;
+    }
 
     try {
-      console.log('[PerkUp] Syncing user:', telegramUser.id);
+      console.log('[PerkUp] Syncing user:', {
+        id: telegramUser.id,
+        username: telegramUser.username,
+        firstName: telegramUser.firstName,
+      });
+
       const response = await api.post<{ user: AppUser }>('/api/user/sync', {
         telegramId: telegramUser.id,
         username: telegramUser.username,
         firstName: telegramUser.firstName,
       });
 
+      console.log('[PerkUp] Sync response:', response.data);
+
       const user = response.data.user;
+      if (!user) {
+        console.error('[PerkUp] Sync response has no user object:', response.data);
+        return;
+      }
+
       setAppUser(user);
 
       // Check if can spin
@@ -166,9 +186,13 @@ function App() {
         }
       }
 
-      console.log('[PerkUp] User synced:', user);
+      console.log('[PerkUp] User synced successfully:', user);
     } catch (err) {
       console.error('[PerkUp] Sync error:', err);
+      if (axios.isAxiosError(err)) {
+        console.error('[PerkUp] Sync error response:', err.response?.data);
+        console.error('[PerkUp] Sync error status:', err.response?.status);
+      }
     }
   };
 
@@ -300,22 +324,20 @@ function App() {
               <h1 className="text-xl font-bold flex items-center gap-2" style={{ color: theme.textColor }}>
                 <span>☕</span> PerkUp
               </h1>
-              {telegramUser && (
-                <p className="text-sm mt-1" style={{ color: theme.hintColor }}>
-                  Привіт, {telegramUser.firstName}!
-                </p>
-              )}
+              <p className="text-sm mt-1" style={{ color: theme.hintColor }}>
+                Привіт, {telegramUser?.firstName || appUser?.firstName || 'Гість'}!
+              </p>
             </div>
             {/* Balance with Progress */}
-            {appUser && (
-              <div className="flex flex-col items-end">
-                <div className="flex items-center gap-2 px-4 py-2 rounded-full" style={{ backgroundColor: '#FFF8E1' }}>
-                  <span className="text-lg">🪙</span>
-                  <span className="font-bold text-lg" style={{ color: '#FFB300' }}>
-                    {appUser.points}
-                  </span>
-                </div>
-                {/* Progress bar */}
+            <div className="flex flex-col items-end">
+              <div className="flex items-center gap-2 px-4 py-2 rounded-full" style={{ backgroundColor: '#FFF8E1' }}>
+                <span className="text-lg">🪙</span>
+                <span className="font-bold text-lg" style={{ color: '#FFB300' }}>
+                  {appUser ? appUser.points : '...'}
+                </span>
+              </div>
+              {/* Progress bar */}
+              {appUser && (
                 <div className="mt-1 w-full px-1">
                   <div className="flex items-center gap-1">
                     <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: theme.hintColor + '30' }}>
@@ -332,8 +354,8 @@ function App() {
                     </span>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           {/* Tabs */}
