@@ -1,5 +1,34 @@
 import { Bot, InlineKeyboard, Keyboard } from 'grammy';
 
+// API Response Types
+interface UserRoleResponse {
+  role: string;
+  isAdmin: boolean;
+  isOwner: boolean;
+}
+
+interface AdminListResponse {
+  admins: Array<{
+    telegramId: string;
+    firstName: string | null;
+    username: string | null;
+    role: string;
+  }>;
+}
+
+interface SetRoleResponse {
+  success?: boolean;
+  error?: string;
+}
+
+interface VerifyCodeResponse {
+  success?: boolean;
+  message?: string;
+  user?: {
+    firstName: string | null;
+  };
+}
+
 // Environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const API_URL = process.env.API_URL || 'https://backend-production-5ee9.up.railway.app';
@@ -50,11 +79,12 @@ const PROXIMITY_MESSAGES = [
 /**
  * Check user role via API
  */
-async function getUserRole(telegramId: number): Promise<{ role: string; isAdmin: boolean; isOwner: boolean }> {
+async function getUserRole(telegramId: number): Promise<UserRoleResponse> {
   try {
     const response = await fetch(`${API_URL}/api/admin/check-role?telegramId=${telegramId}`);
     if (response.ok) {
-      return await response.json();
+      const data = (await response.json()) as UserRoleResponse;
+      return data;
     }
   } catch (error) {
     console.error('[API] Failed to check role:', error);
@@ -69,7 +99,7 @@ async function getAdminList(requesterId: number): Promise<Array<{ telegramId: st
   try {
     const response = await fetch(`${API_URL}/api/admin/list?requesterId=${requesterId}`);
     if (response.ok) {
-      const data = await response.json();
+      const data = (await response.json()) as AdminListResponse;
       return data.admins || [];
     }
   } catch (error) {
@@ -88,7 +118,7 @@ async function setUserRole(requesterId: number, targetTelegramId: number, newRol
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ requesterId, targetTelegramId, newRole }),
     });
-    const data = await response.json();
+    const data = (await response.json()) as SetRoleResponse;
     if (response.ok) {
       return { success: true };
     }
@@ -109,9 +139,9 @@ async function verifyCode(adminTelegramId: number, code: string): Promise<{ succ
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ adminTelegramId, code: code.toUpperCase() }),
     });
-    const data = await response.json();
+    const data = (await response.json()) as VerifyCodeResponse;
     if (response.ok) {
-      return { success: true, message: data.message, user: data.user };
+      return { success: true, message: data.message || 'Код підтверджено', user: data.user };
     }
     return { success: false, message: data.message || 'Помилка перевірки коду' };
   } catch (error) {
