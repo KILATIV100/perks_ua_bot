@@ -1,8 +1,8 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
 
-// Owner Telegram ID
-const OWNER_TELEGRAM_ID = 7363233852n;
+// Owner Telegram ID (as string)
+const OWNER_TELEGRAM_ID = '7363233852';
 
 // Telegram Bot API
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -21,7 +21,7 @@ async function notifyOwner(text: string): Promise<void> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id: OWNER_TELEGRAM_ID.toString(),
+        chat_id: OWNER_TELEGRAM_ID,
         text,
         parse_mode: 'Markdown',
       }),
@@ -35,15 +35,15 @@ async function notifyOwner(text: string): Promise<void> {
   }
 }
 
-// Validation schemas
+// Validation schemas - telegramId can be number or string
 const setRoleSchema = z.object({
-  requesterId: z.number(), // Who is making the request
-  targetTelegramId: z.number(), // Who is being changed
+  requesterId: z.union([z.number(), z.string()]).transform(String),
+  targetTelegramId: z.union([z.number(), z.string()]).transform(String),
   newRole: z.enum(['USER', 'ADMIN', 'OWNER']),
 });
 
 const verifyCodeSchema = z.object({
-  adminTelegramId: z.number(),
+  adminTelegramId: z.union([z.number(), z.string()]).transform(String),
   code: z.string().regex(/^[A-Z]{2}-\d{5}$/, 'Invalid code format. Expected: XX-00000'),
 });
 
@@ -54,7 +54,7 @@ export async function adminRoutes(
   // GET /api/admin/list - List all admins (only for Owner)
   app.get<{ Querystring: { requesterId: string } }>('/list', async (request, reply) => {
     try {
-      const requesterId = BigInt(request.query.requesterId);
+      const requesterId = request.query.requesterId;
 
       // Check if requester is Owner
       const requester = await app.prisma.user.findUnique({
@@ -81,12 +81,8 @@ export async function adminRoutes(
         orderBy: { createdAt: 'asc' },
       });
 
-      return reply.send({
-        admins: admins.map((admin) => ({
-          ...admin,
-          telegramId: admin.telegramId.toString(),
-        })),
-      });
+      // telegramId is now string, no conversion needed
+      return reply.send({ admins });
     } catch (error) {
       app.log.error({ err: error }, 'Admin list error');
       return reply.status(500).send({ error: 'Failed to get admin list' });
@@ -102,7 +98,7 @@ export async function adminRoutes(
 
       // Check if requester is Owner
       const requester = await app.prisma.user.findUnique({
-        where: { telegramId: BigInt(body.requesterId) },
+        where: { telegramId: body.requesterId },
       });
 
       if (!requester || requester.role !== 'OWNER') {
@@ -116,10 +112,10 @@ export async function adminRoutes(
 
       // Find or create target user
       const targetUser = await app.prisma.user.upsert({
-        where: { telegramId: BigInt(body.targetTelegramId) },
+        where: { telegramId: body.targetTelegramId },
         update: { role: body.newRole },
         create: {
-          telegramId: BigInt(body.targetTelegramId),
+          telegramId: body.targetTelegramId,
           role: body.newRole,
         },
         select: {
@@ -135,10 +131,7 @@ export async function adminRoutes(
 
       return reply.send({
         success: true,
-        user: {
-          ...targetUser,
-          telegramId: targetUser.telegramId.toString(),
-        },
+        user: targetUser,
       });
     } catch (error) {
       app.log.error({ err: error }, 'Set role error');
@@ -158,7 +151,7 @@ export async function adminRoutes(
 
       // Check if admin has permission
       const admin = await app.prisma.user.findUnique({
-        where: { telegramId: BigInt(body.adminTelegramId) },
+        where: { telegramId: body.adminTelegramId },
       });
 
       if (!admin || (admin.role !== 'ADMIN' && admin.role !== 'OWNER')) {
@@ -208,7 +201,7 @@ export async function adminRoutes(
         data: {
           used: true,
           usedAt: now,
-          usedBy: BigInt(body.adminTelegramId),
+          usedBy: body.adminTelegramId,
         },
       });
 
@@ -233,7 +226,7 @@ export async function adminRoutes(
         user: {
           firstName: redemptionCode.user.firstName,
           username: redemptionCode.user.username,
-          telegramId: redemptionCode.user.telegramId.toString(),
+          telegramId: redemptionCode.user.telegramId,
         },
         code: body.code,
         verifiedAt: now.toISOString(),
@@ -251,7 +244,7 @@ export async function adminRoutes(
   // GET /api/admin/stats - Get 24h statistics (only for Owner)
   app.get<{ Querystring: { requesterId: string } }>('/stats', async (request, reply) => {
     try {
-      const requesterId = BigInt(request.query.requesterId);
+      const requesterId = request.query.requesterId;
 
       // Check if requester is Owner
       const requester = await app.prisma.user.findUnique({
@@ -313,7 +306,7 @@ export async function adminRoutes(
   // GET /api/admin/check-role - Check user role
   app.get<{ Querystring: { telegramId: string } }>('/check-role', async (request, reply) => {
     try {
-      const telegramId = BigInt(request.query.telegramId);
+      const telegramId = request.query.telegramId;
 
       const user = await app.prisma.user.findUnique({
         where: { telegramId },
@@ -334,7 +327,7 @@ export async function adminRoutes(
   // GET /api/admin/export-users - Export all users (only for Owner)
   app.get<{ Querystring: { requesterId: string } }>('/export-users', async (request, reply) => {
     try {
-      const requesterId = BigInt(request.query.requesterId);
+      const requesterId = request.query.requesterId;
 
       // Check if requester is Owner
       const requester = await app.prisma.user.findUnique({
@@ -362,18 +355,13 @@ export async function adminRoutes(
         orderBy: { createdAt: 'asc' },
       });
 
-      // Convert BigInt to string for JSON serialization
-      const exportData = users.map((user) => ({
-        ...user,
-        telegramId: user.telegramId.toString(),
-      }));
-
+      // telegramId is now string, no conversion needed
       return reply.send({
         exportedAt: new Date().toISOString(),
-        totalUsers: exportData.length,
-        totalPoints: exportData.reduce((sum, u) => sum + u.points, 0),
-        totalSpins: exportData.reduce((sum, u) => sum + u.totalSpins, 0),
-        users: exportData,
+        totalUsers: users.length,
+        totalPoints: users.reduce((sum, u) => sum + u.points, 0),
+        totalSpins: users.reduce((sum, u) => sum + u.totalSpins, 0),
+        users,
       });
     } catch (error) {
       app.log.error({ err: error }, 'Export users error');

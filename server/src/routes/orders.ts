@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
 
 const CreateOrderSchema = z.object({
-  telegramId: z.number(),
+  telegramId: z.union([z.number(), z.string()]).transform(String),
   locationId: z.string().uuid(),
   items: z.array(
     z.object({
@@ -34,12 +34,12 @@ export async function orderRoutes(
 
     // Find or create user
     let user = await app.prisma.user.findUnique({
-      where: { telegramId: BigInt(telegramId) },
+      where: { telegramId },
     });
 
     if (!user) {
       user = await app.prisma.user.create({
-        data: { telegramId: BigInt(telegramId) },
+        data: { telegramId },
       });
     }
 
@@ -107,7 +107,7 @@ export async function orderRoutes(
       }
 
       const user = await app.prisma.user.findUnique({
-        where: { telegramId: BigInt(telegramId) },
+        where: { telegramId },
       });
 
       if (!user) {

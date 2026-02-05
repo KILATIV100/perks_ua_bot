@@ -32,22 +32,22 @@ async function sendTelegramMessage(chatId: number, text: string): Promise<void> 
   }
 }
 
-// Validation schemas
+// Validation schemas - telegramId can be number or string
 const syncUserSchema = z.object({
-  telegramId: z.number(),
+  telegramId: z.union([z.number(), z.string()]).transform(String),
   username: z.string().optional(),
   firstName: z.string().optional(),
 });
 
 const spinSchema = z.object({
-  telegramId: z.number(),
+  telegramId: z.union([z.number(), z.string()]).transform(String),
   userLat: z.number().optional(),
   userLng: z.number().optional(),
   devMode: z.boolean().optional(),
 });
 
 const redeemSchema = z.object({
-  telegramId: z.number(),
+  telegramId: z.union([z.number(), z.string()]).transform(String),
 });
 
 // Points required for redemption
@@ -64,7 +64,7 @@ const MAX_SPIN_DISTANCE_METERS = 50;
 
 // Dev mode: bypass geolocation check for these telegram IDs
 const DEV_TELEGRAM_IDS = [
-  7363233852, // Owner/Developer
+  '7363233852', // Owner/Developer
 ];
 
 /**
@@ -107,13 +107,13 @@ export async function userRoutes(
       });
 
       const user = await app.prisma.user.upsert({
-        where: { telegramId: BigInt(body.telegramId) },
+        where: { telegramId: body.telegramId },
         update: {
           username: body.username,
           firstName: body.firstName,
         },
         create: {
-          telegramId: BigInt(body.telegramId),
+          telegramId: body.telegramId,
           username: body.username,
           firstName: body.firstName,
           points: 0,
@@ -134,18 +134,15 @@ export async function userRoutes(
 
       console.log('[SYNC] User synced:', {
         id: user.id,
-        telegramId: user.telegramId.toString(),
+        telegramId: user.telegramId,
         firstName: user.firstName,
         points: user.points,
         role: user.role,
       });
 
-      // Convert BigInt to string for JSON serialization
+      // telegramId is now a string, no conversion needed
       return reply.send({
-        user: {
-          ...user,
-          telegramId: user.telegramId.toString(),
-        },
+        user,
       });
     } catch (error) {
       console.error('[SYNC] Error:', error);
@@ -166,7 +163,7 @@ export async function userRoutes(
 
       // Find user
       const user = await app.prisma.user.findUnique({
-        where: { telegramId: BigInt(body.telegramId) },
+        where: { telegramId: body.telegramId },
       });
 
       if (!user) {
@@ -174,7 +171,7 @@ export async function userRoutes(
       }
 
       // Check if dev mode is enabled (bypass geolocation)
-      const isDevUser = DEV_TELEGRAM_IDS.includes(body.telegramId);
+      const isDevUser = DEV_TELEGRAM_IDS.includes(String(body.telegramId));
       const isDevMode = body.devMode === true;
       const bypassGeoCheck = isDevUser || isDevMode;
 
@@ -273,7 +270,7 @@ export async function userRoutes(
 
       // Update user
       const updatedUser = await app.prisma.user.update({
-        where: { telegramId: BigInt(body.telegramId) },
+        where: { telegramId: body.telegramId },
         data: {
           points: { increment: reward },
           totalSpins: { increment: 1 },
@@ -295,8 +292,8 @@ export async function userRoutes(
       const userName = updatedUser.firstName || 'Друже';
       const message = `🎉 *${userName}, вітаємо!*\n\nТи виграв *${reward} балів* на Колесі Фортуни!\n\n💰 Твій баланс: *${updatedUser.points}* балів\n🎡 Всього обертань: *${updatedUser.totalSpins}*`;
 
-      // Send async, don't wait for it
-      sendTelegramMessage(body.telegramId, message).catch((err) => {
+      // Send async, don't wait for it (convert to number for Telegram API)
+      sendTelegramMessage(Number(body.telegramId), message).catch((err) => {
         app.log.error({ err }, 'Failed to send spin notification');
       });
 
@@ -324,7 +321,7 @@ export async function userRoutes(
 
       // Find user
       const user = await app.prisma.user.findUnique({
-        where: { telegramId: BigInt(body.telegramId) },
+        where: { telegramId: body.telegramId },
       });
 
       if (!user) {
@@ -357,7 +354,7 @@ export async function userRoutes(
       // Deduct points and create redemption code in a transaction
       const [updatedUser] = await app.prisma.$transaction([
         app.prisma.user.update({
-          where: { telegramId: BigInt(body.telegramId) },
+          where: { telegramId: body.telegramId },
           data: {
             points: { decrement: REDEEM_POINTS_REQUIRED },
           },
@@ -383,7 +380,7 @@ export async function userRoutes(
       const userName = updatedUser.firstName || 'Друже';
       const message = `🎁 *${userName}, вітаємо!*\n\nТи обміняв 100 балів на безкоштовний напій!\n\n🎟 *Твій код: ${code}*\n\nПокажи цей код баристі, щоб отримати будь-який напій до 100 грн.\n\n⏰ Код дійсний 15 хвилин.\n\n💰 Залишок балів: *${updatedUser.points}*`;
 
-      sendTelegramMessage(body.telegramId, message).catch((err) => {
+      sendTelegramMessage(Number(body.telegramId), message).catch((err) => {
         app.log.error({ err }, 'Failed to send redeem notification');
       });
 
@@ -405,7 +402,7 @@ export async function userRoutes(
   // GET /api/user/:telegramId - Get user data
   app.get<{ Params: { telegramId: string } }>('/:telegramId', async (request, reply) => {
     try {
-      const telegramId = BigInt(request.params.telegramId);
+      const telegramId = request.params.telegramId;
 
       const user = await app.prisma.user.findUnique({
         where: { telegramId },
@@ -425,12 +422,7 @@ export async function userRoutes(
         return reply.status(404).send({ error: 'User not found' });
       }
 
-      return reply.send({
-        user: {
-          ...user,
-          telegramId: user.telegramId.toString(),
-        },
-      });
+      return reply.send({ user });
     } catch (error) {
       app.log.error({ err: error }, 'Get user error');
       return reply.status(500).send({ error: 'Failed to get user' });

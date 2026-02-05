@@ -200,7 +200,7 @@ function App() {
       });
 
       const response = await api.post<{ user: AppUser }>('/api/user/sync', {
-        telegramId: telegramUser.id,
+        telegramId: String(telegramUser.id),
         username: telegramUser.username,
         firstName: telegramUser.firstName,
       });
@@ -274,7 +274,7 @@ function App() {
 
     try {
       const response = await api.post<{ reward: number; newBalance: number; nextSpinAt: string }>('/api/user/spin', {
-        telegramId: telegramUser.id,
+        telegramId: String(telegramUser.id),
         userLat,
         userLng,
         devMode,
@@ -308,7 +308,7 @@ function App() {
     setIsRedeeming(true);
     try {
       const response = await api.post<{ code: string; newBalance: number }>('/api/user/redeem', {
-        telegramId: telegramUser.id,
+        telegramId: String(telegramUser.id),
       });
 
       setAppUser(prev => prev ? { ...prev, points: response.data.newBalance } : null);

@@ -6,8 +6,13 @@ import { orderRoutes } from './routes/orders.js';
 import { userRoutes } from './routes/users.js';
 import { adminRoutes } from './routes/admin.js';
 
-// Owner Telegram ID
-const OWNER_TELEGRAM_ID = 7363233852n;
+// Fix BigInt JSON serialization
+(BigInt.prototype as any).toJSON = function () {
+  return this.toString();
+};
+
+// Owner Telegram ID (as string)
+const OWNER_TELEGRAM_ID = '7363233852';
 
 // Prisma client - uses DATABASE_URL from environment
 const prisma = new PrismaClient({
