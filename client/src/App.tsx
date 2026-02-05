@@ -69,110 +69,27 @@ function useTelegramTheme(): TelegramTheme {
   }, []);
 }
 
-// Parse initData string to extract user data (fallback method)
-function parseInitDataUser(initData: string): TelegramUser | null {
-  try {
-    // initData is a URL-encoded string with key=value pairs
-    const params = new URLSearchParams(initData);
-    const userStr = params.get('user');
-    if (!userStr) {
-      console.warn('[PerkUp] No user param in initData');
+// Get Telegram user data (simple synchronous version - original working pattern)
+function useTelegramUser(): TelegramUser | null {
+  return useMemo(() => {
+    console.log('[PerkUp] Getting Telegram user...');
+    console.log('[PerkUp] WebApp.initData:', WebApp.initData);
+    console.log('[PerkUp] WebApp.initDataUnsafe:', JSON.stringify(WebApp.initDataUnsafe));
+
+    const user = WebApp.initDataUnsafe?.user;
+    if (!user) {
+      console.warn('[PerkUp] No user data from Telegram WebApp');
       return null;
     }
-    const userData = JSON.parse(decodeURIComponent(userStr));
-    console.log('[PerkUp] Parsed user from initData string:', userData);
+
+    console.log('[PerkUp] Telegram user found:', user);
     return {
-      id: userData.id,
-      firstName: userData.first_name || 'Гість',
-      lastName: userData.last_name,
-      username: userData.username,
+      id: user.id,
+      firstName: user.first_name || 'Гість',
+      lastName: user.last_name,
+      username: user.username,
     };
-  } catch (e) {
-    console.error('[PerkUp] Failed to parse initData:', e);
-    return null;
-  }
-}
-
-// Get Telegram user data with retry logic
-function useTelegramUser(): { user: TelegramUser | null; isReady: boolean } {
-  const [user, setUser] = useState<TelegramUser | null>(null);
-  const [isReady, setIsReady] = useState(false);
-
-  useEffect(() => {
-    const getTelegramUser = (): TelegramUser | null => {
-      console.log('[PerkUp] WebApp.initData length:', WebApp.initData?.length || 0);
-      console.log('[PerkUp] WebApp.initData:', WebApp.initData);
-      console.log('[PerkUp] WebApp.initDataUnsafe:', JSON.stringify(WebApp.initDataUnsafe));
-      console.log('[PerkUp] WebApp.platform:', WebApp.platform);
-      console.log('[PerkUp] WebApp.version:', WebApp.version);
-
-      // Try initDataUnsafe first (preferred method)
-      const userData = WebApp.initDataUnsafe?.user;
-      if (userData && userData.id) {
-        console.log('[PerkUp] Telegram user from initDataUnsafe:', userData);
-        return {
-          id: userData.id,
-          firstName: userData.first_name || 'Гість',
-          lastName: userData.last_name,
-          username: userData.username,
-        };
-      }
-
-      // Fallback: try parsing initData string directly
-      if (WebApp.initData && WebApp.initData.length > 0) {
-        console.log('[PerkUp] Trying fallback: parsing initData string');
-        const parsedUser = parseInitDataUser(WebApp.initData);
-        if (parsedUser) {
-          return parsedUser;
-        }
-      }
-
-      console.warn('[PerkUp] No user data available - app may be running outside Telegram');
-      return null;
-    };
-
-    // Try immediately
-    const immediateUser = getTelegramUser();
-    if (immediateUser) {
-      setUser(immediateUser);
-      setIsReady(true);
-      return;
-    }
-
-    // If not available, retry after delay (WebApp SDK might need time to initialize)
-    console.log('[PerkUp] User not available, retrying in 300ms...');
-    const timer1 = setTimeout(() => {
-      const retryUser = getTelegramUser();
-      if (retryUser) {
-        setUser(retryUser);
-        setIsReady(true);
-      } else {
-        // Second retry
-        console.log('[PerkUp] Still no user, retry 2 in 300ms...');
-        const timer2 = setTimeout(() => {
-          const retry2User = getTelegramUser();
-          if (retry2User) {
-            setUser(retry2User);
-            setIsReady(true);
-          } else {
-            // Final retry
-            console.log('[PerkUp] Final retry in 400ms...');
-            const timer3 = setTimeout(() => {
-              const finalUser = getTelegramUser();
-              setUser(finalUser);
-              setIsReady(true);
-            }, 400);
-            return () => clearTimeout(timer3);
-          }
-        }, 300);
-        return () => clearTimeout(timer2);
-      }
-    }, 300);
-
-    return () => clearTimeout(timer1);
   }, []);
-
-  return { user, isReady };
 }
 
 // Points required for redemption
@@ -193,7 +110,7 @@ function App() {
   const [showConfetti, setShowConfetti] = useState(false);
 
   const theme = useTelegramTheme();
-  const { user: telegramUser, isReady: isTelegramReady } = useTelegramUser();
+  const telegramUser = useTelegramUser();
 
   // Initialize Telegram WebApp
   useEffect(() => {
@@ -203,15 +120,13 @@ function App() {
     WebApp.setBackgroundColor(theme.secondaryBgColor);
   }, [theme]);
 
-  // Sync user with backend when Telegram data is ready
+  // Sync user with backend
   useEffect(() => {
-    if (isTelegramReady && telegramUser) {
-      console.log('[PerkUp] Telegram ready, syncing user...');
+    if (telegramUser) {
+      console.log('[PerkUp] Syncing user with backend...');
       syncUser();
-    } else if (isTelegramReady && !telegramUser) {
-      console.warn('[PerkUp] Telegram ready but no user data - running outside Telegram?');
     }
-  }, [isTelegramReady, telegramUser]);
+  }, [telegramUser]);
 
   // Fetch locations
   useEffect(() => {
@@ -234,32 +149,22 @@ function App() {
     }
   }, [activeTab, selectedLocation, theme]);
 
-  const syncUser = async (retryCount = 0) => {
-    if (!telegramUser) {
-      console.warn('[PerkUp] syncUser called but telegramUser is null');
-      return;
-    }
-
-    const maxRetries = 2;
+  const syncUser = async () => {
+    if (!telegramUser) return;
 
     try {
-      const syncData = {
+      console.log('[PerkUp] Syncing user:', telegramUser.id);
+      const response = await api.post<{ user: AppUser }>('/api/user/sync', {
         telegramId: String(telegramUser.id),
-        username: telegramUser.username || undefined,
-        firstName: telegramUser.firstName || undefined,
-      };
+        username: telegramUser.username,
+        firstName: telegramUser.firstName,
+      });
 
-      console.log('[PerkUp] Syncing user (attempt ' + (retryCount + 1) + '):', syncData);
-      console.log('[PerkUp] API URL:', API_URL);
-
-      const response = await api.post<{ user: AppUser }>('/api/user/sync', syncData);
-
-      console.log('[PerkUp] Sync response status:', response.status);
-      console.log('[PerkUp] Sync response data:', JSON.stringify(response.data));
+      console.log('[PerkUp] Sync response:', response.data);
 
       const user = response.data.user;
       if (!user) {
-        console.error('[PerkUp] Sync response has no user object:', response.data);
+        console.error('[PerkUp] Sync response has no user object');
         return;
       }
 
@@ -280,24 +185,12 @@ function App() {
         }
       }
 
-      console.log('[PerkUp] User synced successfully:', {
-        id: user.id,
-        telegramId: user.telegramId,
-        firstName: user.firstName,
-        points: user.points,
-      });
+      console.log('[PerkUp] User synced successfully:', user);
     } catch (err) {
       console.error('[PerkUp] Sync error:', err);
       if (axios.isAxiosError(err)) {
         console.error('[PerkUp] Sync error response:', err.response?.data);
         console.error('[PerkUp] Sync error status:', err.response?.status);
-        console.error('[PerkUp] Sync error URL:', err.config?.url);
-
-        // Retry on network errors
-        if (!err.response && retryCount < maxRetries) {
-          console.log('[PerkUp] Retrying sync in 1 second...');
-          setTimeout(() => syncUser(retryCount + 1), 1000);
-        }
       }
     }
   };
