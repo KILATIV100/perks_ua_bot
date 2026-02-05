@@ -4,6 +4,10 @@ import { PrismaClient } from '@prisma/client';
 import { locationRoutes } from './routes/locations.js';
 import { orderRoutes } from './routes/orders.js';
 import { userRoutes } from './routes/users.js';
+import { adminRoutes } from './routes/admin.js';
+
+// Owner Telegram ID
+const OWNER_TELEGRAM_ID = 7363233852n;
 
 // Prisma client - uses DATABASE_URL from environment
 const prisma = new PrismaClient({
@@ -77,6 +81,7 @@ app.get('/health', async (_request, reply) => {
 app.register(locationRoutes, { prefix: '/api/locations' });
 app.register(orderRoutes, { prefix: '/api/orders' });
 app.register(userRoutes, { prefix: '/api/user' });
+app.register(adminRoutes, { prefix: '/api/admin' });
 
 // Graceful shutdown
 const gracefulShutdown = async (): Promise<void> => {
@@ -88,12 +93,32 @@ const gracefulShutdown = async (): Promise<void> => {
 process.on('SIGTERM', gracefulShutdown);
 process.on('SIGINT', gracefulShutdown);
 
+// Ensure Owner exists with OWNER role
+const ensureOwnerExists = async (): Promise<void> => {
+  try {
+    const owner = await prisma.user.upsert({
+      where: { telegramId: OWNER_TELEGRAM_ID },
+      update: { role: 'OWNER' },
+      create: {
+        telegramId: OWNER_TELEGRAM_ID,
+        role: 'OWNER',
+      },
+    });
+    console.log(`Owner verified: telegramId=${owner.telegramId}, role=${owner.role}`);
+  } catch (error) {
+    console.error('Failed to ensure owner exists:', error);
+  }
+};
+
 // Start server
 const start = async (): Promise<void> => {
   try {
     // Verify database connection on startup
     await prisma.$connect();
     console.log('Connected to DB successfully');
+
+    // Ensure owner exists
+    await ensureOwnerExists();
 
     const port = parseInt(process.env.PORT || '3000', 10);
     const host = '0.0.0.0';

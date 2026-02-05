@@ -12,6 +12,12 @@ enum LocationStatus {
   coming_soon
 }
 
+enum UserRole {
+  USER
+  ADMIN
+  OWNER
+}
+
 model Location {
   id        String         @id @default(uuid())
   name      String
@@ -27,19 +33,36 @@ model Location {
 }
 
 model User {
-  id         String    @id @default(uuid())
-  telegramId BigInt    @unique
-  username   String?
-  firstName  String?
-  lastName   String?
-  points     Int       @default(0)
-  totalSpins Int       @default(0)
-  lastSpin   DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  orders     Order[]
+  id              String           @id @default(uuid())
+  telegramId      BigInt           @unique
+  username        String?
+  firstName       String?
+  lastName        String?
+  points          Int              @default(0)
+  totalSpins      Int              @default(0)
+  role            UserRole         @default(USER)
+  lastSpin        DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  orders          Order[]
+  redemptionCodes RedemptionCode[]
 
   @@map("users")
+}
+
+model RedemptionCode {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  userId    String
+  used      Boolean  @default(false)
+  usedAt    DateTime?
+  usedBy    BigInt?  // Admin telegramId who verified the code
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("redemption_codes")
 }
 
 model Order {

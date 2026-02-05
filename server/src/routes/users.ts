@@ -328,26 +328,38 @@ export async function userRoutes(
         });
       }
 
-      // Generate unique 6-character code (PRK-XXXX)
-      const codeChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Excluding confusing chars
-      let code = 'PRK-';
-      for (let i = 0; i < 4; i++) {
-        code += codeChars.charAt(Math.floor(Math.random() * codeChars.length));
-      }
+      // Generate unique code in format XX-00000 (e.g., CO-77341)
+      const letterChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+      const letters = letterChars.charAt(Math.floor(Math.random() * letterChars.length)) +
+                      letterChars.charAt(Math.floor(Math.random() * letterChars.length));
+      const numbers = String(Math.floor(Math.random() * 100000)).padStart(5, '0');
+      const code = `${letters}-${numbers}`;
 
-      // Deduct points
-      const updatedUser = await app.prisma.user.update({
-        where: { telegramId: BigInt(body.telegramId) },
-        data: {
-          points: { decrement: REDEEM_POINTS_REQUIRED },
-        },
-        select: {
-          id: true,
-          telegramId: true,
-          points: true,
-          firstName: true,
-        },
-      });
+      // Code expires in 15 minutes
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+      // Deduct points and create redemption code in a transaction
+      const [updatedUser] = await app.prisma.$transaction([
+        app.prisma.user.update({
+          where: { telegramId: BigInt(body.telegramId) },
+          data: {
+            points: { decrement: REDEEM_POINTS_REQUIRED },
+          },
+          select: {
+            id: true,
+            telegramId: true,
+            points: true,
+            firstName: true,
+          },
+        }),
+        app.prisma.redemptionCode.create({
+          data: {
+            code,
+            userId: user.id,
+            expiresAt,
+          },
+        }),
+      ]);
 
       app.log.info(`[Redeem Success] telegramId: ${body.telegramId}, code: ${code}, remaining: ${updatedUser.points}`);
 
