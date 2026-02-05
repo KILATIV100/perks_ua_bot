@@ -81,6 +81,9 @@ function useTelegramUser(): TelegramUser | null {
   }, []);
 }
 
+// Points required for redemption
+const REDEEM_POINTS = 100;
+
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('locations');
   const [locations, setLocations] = useState<Location[]>([]);
@@ -90,6 +93,10 @@ function App() {
   const [appUser, setAppUser] = useState<AppUser | null>(null);
   const [canSpin, setCanSpin] = useState(true);
   const [nextSpinAt, setNextSpinAt] = useState<string | null>(null);
+  const [showTerms, setShowTerms] = useState(false);
+  const [redeemCode, setRedeemCode] = useState<string | null>(null);
+  const [isRedeeming, setIsRedeeming] = useState(false);
+  const [showConfetti, setShowConfetti] = useState(false);
 
   const theme = useTelegramTheme();
   const telegramUser = useTelegramUser();
@@ -226,6 +233,34 @@ function App() {
     }
   };
 
+  const handleRedeem = async () => {
+    if (!telegramUser || isRedeeming) return;
+    if (!appUser || appUser.points < REDEEM_POINTS) return;
+
+    setIsRedeeming(true);
+    try {
+      const response = await api.post<{ code: string; newBalance: number }>('/api/user/redeem', {
+        telegramId: telegramUser.id,
+      });
+
+      setAppUser(prev => prev ? { ...prev, points: response.data.newBalance } : null);
+      setRedeemCode(response.data.code);
+      setShowConfetti(true);
+
+      // Hide confetti after 5 seconds
+      setTimeout(() => setShowConfetti(false), 5000);
+    } catch (err) {
+      console.error('[PerkUp] Redeem error:', err);
+      if (axios.isAxiosError(err) && err.response?.data?.message) {
+        WebApp.showAlert(err.response.data.message);
+      } else {
+        WebApp.showAlert('Не вдалося обміняти бали. Спробуйте пізніше.');
+      }
+    } finally {
+      setIsRedeeming(false);
+    }
+  };
+
   // Loading state
   if (loading) {
     return (
@@ -271,13 +306,32 @@ function App() {
                 </p>
               )}
             </div>
-            {/* Balance */}
+            {/* Balance with Progress */}
             {appUser && (
-              <div className="flex items-center gap-2 px-4 py-2 rounded-full" style={{ backgroundColor: '#FFF8E1' }}>
-                <span className="text-lg">🪙</span>
-                <span className="font-bold text-lg" style={{ color: '#FFB300' }}>
-                  {appUser.points}
-                </span>
+              <div className="flex flex-col items-end">
+                <div className="flex items-center gap-2 px-4 py-2 rounded-full" style={{ backgroundColor: '#FFF8E1' }}>
+                  <span className="text-lg">🪙</span>
+                  <span className="font-bold text-lg" style={{ color: '#FFB300' }}>
+                    {appUser.points}
+                  </span>
+                </div>
+                {/* Progress bar */}
+                <div className="mt-1 w-full px-1">
+                  <div className="flex items-center gap-1">
+                    <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: theme.hintColor + '30' }}>
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${Math.min((appUser.points / REDEEM_POINTS) * 100, 100)}%`,
+                          backgroundColor: appUser.points >= REDEEM_POINTS ? '#22c55e' : '#FFB300',
+                        }}
+                      />
+                    </div>
+                    <span className="text-xs" style={{ color: theme.hintColor }}>
+                      {appUser.points >= REDEEM_POINTS ? '100' : appUser.points}/{REDEEM_POINTS}
+                    </span>
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -378,14 +432,133 @@ function App() {
         ) : (
           /* Bonuses Tab */
           <div>
+            {/* Rewards Section */}
+            <div className="mb-6 p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+              <h3 className="font-semibold mb-3 flex items-center gap-2" style={{ color: theme.textColor }}>
+                <span>🎁</span> Твої нагороди
+              </h3>
+
+              {/* Redeem Code Display */}
+              {redeemCode && (
+                <div className="mb-4 p-4 rounded-xl text-center" style={{ backgroundColor: '#ECFDF5' }}>
+                  <p className="text-sm mb-2" style={{ color: '#065f46' }}>Твій код:</p>
+                  <p className="text-2xl font-bold mb-2" style={{ color: '#059669' }}>{redeemCode}</p>
+                  <p className="text-xs" style={{ color: '#065f46' }}>
+                    Покажи цей код баристі, щоб отримати будь-який напій до 100 грн!
+                  </p>
+                  <p className="text-xs mt-2" style={{ color: '#6b7280' }}>
+                    Код дійсний 15 хвилин
+                  </p>
+                </div>
+              )}
+
+              {/* Redeem Button */}
+              {appUser && (
+                <button
+                  onClick={handleRedeem}
+                  disabled={appUser.points < REDEEM_POINTS || isRedeeming}
+                  className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                  style={{
+                    backgroundColor: appUser.points >= REDEEM_POINTS ? '#059669' : theme.hintColor + '30',
+                    color: appUser.points >= REDEEM_POINTS ? '#ffffff' : theme.hintColor,
+                  }}
+                >
+                  {isRedeeming ? (
+                    'Обробка...'
+                  ) : appUser.points >= REDEEM_POINTS ? (
+                    '☕ Обміняти 100 балів на напій'
+                  ) : (
+                    `Збери ще ${REDEEM_POINTS - appUser.points} балів`
+                  )}
+                </button>
+              )}
+
+              {/* Progress indicator */}
+              {appUser && appUser.points < REDEEM_POINTS && (
+                <div className="mt-3">
+                  <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: theme.hintColor + '20' }}>
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${(appUser.points / REDEEM_POINTS) * 100}%`,
+                        backgroundColor: '#FFB300',
+                      }}
+                    />
+                  </div>
+                  <p className="text-xs text-center mt-1" style={{ color: theme.hintColor }}>
+                    {appUser.points} / {REDEEM_POINTS} балів до безкоштовної кави
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Wheel Section */}
             <div className="mb-6 text-center">
               <h2 className="text-lg font-semibold mb-1" style={{ color: theme.textColor }}>Колесо Фортуни</h2>
               <p className="text-sm" style={{ color: theme.hintColor }}>Крутіть колесо та отримуйте бали!</p>
             </div>
             <WheelOfFortune onSpin={handleSpin} canSpin={canSpin} nextSpinAt={nextSpinAt} theme={theme} />
+
+            {/* Terms Link */}
+            <div className="mt-8 text-center">
+              <button
+                onClick={() => setShowTerms(true)}
+                className="text-sm underline"
+                style={{ color: theme.hintColor }}
+              >
+                Умови використання
+              </button>
+            </div>
           </div>
         )}
       </main>
+
+      {/* Terms Modal */}
+      {showTerms && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="w-full max-w-md rounded-2xl p-6 max-h-[80vh] overflow-y-auto" style={{ backgroundColor: theme.bgColor }}>
+            <h2 className="text-lg font-bold mb-4" style={{ color: theme.textColor }}>
+              📜 Умови використання
+            </h2>
+            <div className="space-y-3 text-sm" style={{ color: theme.textColor }}>
+              <p>1. Акція діє в усіх кав'ярнях PerkUp.</p>
+              <p>2. 100 накопичених балів можна обміняти на один будь-який напій вартістю до 100 грн.</p>
+              <p>3. Якщо вартість напою перевищує 100 грн, користувач може доплатити різницю.</p>
+              <p>4. Код на отримання напою дійсний протягом 15 хвилин після активації.</p>
+              <p>5. Бали не підлягають обміну на грошовий еквівалент.</p>
+            </div>
+            <button
+              onClick={() => setShowTerms(false)}
+              className="mt-6 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+              style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+            >
+              Зрозуміло
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Confetti Effect */}
+      {showConfetti && (
+        <div className="fixed inset-0 z-40 pointer-events-none overflow-hidden">
+          {[...Array(50)].map((_, i) => (
+            <div
+              key={i}
+              className="absolute animate-confetti"
+              style={{
+                left: `${Math.random() * 100}%`,
+                top: '-10px',
+                width: '10px',
+                height: '10px',
+                backgroundColor: ['#FFD700', '#FF6347', '#4CAF50', '#2196F3', '#9C27B0'][Math.floor(Math.random() * 5)],
+                borderRadius: Math.random() > 0.5 ? '50%' : '0',
+                animationDelay: `${Math.random() * 2}s`,
+                animationDuration: `${2 + Math.random() * 2}s`,
+              }}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

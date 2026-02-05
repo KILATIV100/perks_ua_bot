@@ -46,6 +46,13 @@ const spinSchema = z.object({
   devMode: z.boolean().optional(),
 });
 
+const redeemSchema = z.object({
+  telegramId: z.number(),
+});
+
+// Points required for redemption
+const REDEEM_POINTS_REQUIRED = 100;
+
 // Spin cooldown in milliseconds (24 hours)
 const SPIN_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
@@ -289,6 +296,81 @@ export async function userRoutes(
         return reply.status(400).send({ error: 'Invalid request data', details: error.errors });
       }
       return reply.status(500).send({ error: 'Failed to process spin' });
+    }
+  });
+
+  // POST /api/user/redeem - Redeem points for a drink
+  app.post('/redeem', async (request, reply) => {
+    try {
+      const body = redeemSchema.parse(request.body);
+
+      app.log.info(`[Redeem Attempt] telegramId: ${body.telegramId}`);
+
+      // Find user
+      const user = await app.prisma.user.findUnique({
+        where: { telegramId: BigInt(body.telegramId) },
+      });
+
+      if (!user) {
+        return reply.status(404).send({ error: 'User not found' });
+      }
+
+      // Check if user has enough points
+      if (user.points < REDEEM_POINTS_REQUIRED) {
+        const pointsNeeded = REDEEM_POINTS_REQUIRED - user.points;
+        app.log.info(`[Redeem Denied] telegramId: ${body.telegramId}, points: ${user.points}, need: ${pointsNeeded} more`);
+
+        return reply.status(400).send({
+          error: 'InsufficientPoints',
+          message: `Недостатньо балів. Потрібно ще ${pointsNeeded} балів.`,
+          currentPoints: user.points,
+          pointsNeeded,
+        });
+      }
+
+      // Generate unique 6-character code (PRK-XXXX)
+      const codeChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Excluding confusing chars
+      let code = 'PRK-';
+      for (let i = 0; i < 4; i++) {
+        code += codeChars.charAt(Math.floor(Math.random() * codeChars.length));
+      }
+
+      // Deduct points
+      const updatedUser = await app.prisma.user.update({
+        where: { telegramId: BigInt(body.telegramId) },
+        data: {
+          points: { decrement: REDEEM_POINTS_REQUIRED },
+        },
+        select: {
+          id: true,
+          telegramId: true,
+          points: true,
+          firstName: true,
+        },
+      });
+
+      app.log.info(`[Redeem Success] telegramId: ${body.telegramId}, code: ${code}, remaining: ${updatedUser.points}`);
+
+      // Send notification via Telegram bot
+      const userName = updatedUser.firstName || 'Друже';
+      const message = `🎁 *${userName}, вітаємо!*\n\nТи обміняв 100 балів на безкоштовний напій!\n\n🎟 *Твій код: ${code}*\n\nПокажи цей код баристі, щоб отримати будь-який напій до 100 грн.\n\n⏰ Код дійсний 15 хвилин.\n\n💰 Залишок балів: *${updatedUser.points}*`;
+
+      sendTelegramMessage(body.telegramId, message).catch((err) => {
+        app.log.error({ err }, 'Failed to send redeem notification');
+      });
+
+      return reply.send({
+        success: true,
+        code,
+        newBalance: updatedUser.points,
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 minutes
+      });
+    } catch (error) {
+      app.log.error({ err: error }, 'Redeem error');
+      if (error instanceof z.ZodError) {
+        return reply.status(400).send({ error: 'Invalid request data', details: error.errors });
+      }
+      return reply.status(500).send({ error: 'Failed to process redemption' });
     }
   });
 
