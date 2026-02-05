@@ -4,10 +4,13 @@ import { z } from 'zod';
 // Telegram Bot API
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
+// Owner Telegram ID
+const OWNER_TELEGRAM_ID = '7363233852';
+
 /**
  * Send message to user via Telegram Bot
  */
-async function sendTelegramMessage(chatId: number, text: string): Promise<void> {
+async function sendTelegramMessage(chatId: number | string, text: string): Promise<void> {
   if (!BOT_TOKEN) {
     console.log('[Telegram] BOT_TOKEN not set, skipping notification');
     return;
@@ -30,6 +33,19 @@ async function sendTelegramMessage(chatId: number, text: string): Promise<void> 
   } catch (error) {
     console.log('[Telegram] Error sending message:', error);
   }
+}
+
+/**
+ * Notify Owner about new user
+ */
+async function notifyOwnerNewUser(firstName: string | undefined, telegramId: string): Promise<void> {
+  const message = `🆕 *Новий клієнт у системі!*\n\n` +
+    `👤 Ім'я: ${firstName || 'Невідомо'}\n` +
+    `🆔 ID: \`${telegramId}\``;
+
+  sendTelegramMessage(OWNER_TELEGRAM_ID, message).catch((err) => {
+    console.log('[Telegram] Error notifying owner about new user:', err);
+  });
 }
 
 // Validation schemas - telegramId can be number or string
@@ -106,6 +122,14 @@ export async function userRoutes(
         firstName: body.firstName || 'N/A',
       });
 
+      // Check if user exists (to detect new users)
+      const existingUser = await app.prisma.user.findUnique({
+        where: { telegramId: body.telegramId },
+        select: { id: true },
+      });
+
+      const isNewUser = !existingUser;
+
       const user = await app.prisma.user.upsert({
         where: { telegramId: body.telegramId },
         update: {
@@ -138,7 +162,14 @@ export async function userRoutes(
         firstName: user.firstName,
         points: user.points,
         role: user.role,
+        isNewUser,
       });
+
+      // Notify OWNER about new user
+      if (isNewUser) {
+        console.log('[SYNC] New user detected, notifying OWNER');
+        notifyOwnerNewUser(body.firstName, body.telegramId);
+      }
 
       // telegramId is now a string, no conversion needed
       return reply.send({

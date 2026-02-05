@@ -53,6 +53,15 @@ interface ExportResponse {
   }>;
 }
 
+// Response for getting all users for broadcast
+interface AllUsersResponse {
+  users: Array<{
+    telegramId: string;
+    firstName: string | null;
+  }>;
+  total: number;
+}
+
 // Environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const API_URL = process.env.API_URL || 'https://backend-production-5ee9.up.railway.app';
@@ -90,6 +99,9 @@ const waitingForAdminId = new Set<number>();
 
 // Store users waiting for code verification
 const waitingForCode = new Set<number>();
+
+// Store users waiting for broadcast message input
+const waitingForBroadcast = new Set<number>();
 
 // Random notification messages
 const PROXIMITY_MESSAGES = [
@@ -207,6 +219,51 @@ async function getExportUsers(requesterId: number): Promise<ExportResponse | nul
 }
 
 /**
+ * Get all users for broadcast (Owner only)
+ */
+async function getAllUsersForBroadcast(requesterId: number): Promise<AllUsersResponse | null> {
+  try {
+    const response = await fetch(`${API_URL}/api/admin/all-users?requesterId=${requesterId}`);
+    if (response.ok) {
+      const data = (await response.json()) as AllUsersResponse;
+      return data;
+    }
+  } catch (error) {
+    console.error('[API] Failed to get all users:', error);
+  }
+  return null;
+}
+
+/**
+ * Send broadcast message to all users
+ */
+async function sendBroadcast(bot: Bot, message: string, requesterId: number): Promise<{ sent: number; failed: number }> {
+  const usersData = await getAllUsersForBroadcast(requesterId);
+
+  if (!usersData || usersData.users.length === 0) {
+    return { sent: 0, failed: 0 };
+  }
+
+  let sent = 0;
+  let failed = 0;
+
+  for (const user of usersData.users) {
+    try {
+      await bot.api.sendMessage(Number(user.telegramId), message, { parse_mode: 'Markdown' });
+      sent++;
+      // Small delay to avoid hitting rate limits
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } catch (error) {
+      // User probably blocked the bot
+      console.log(`[Broadcast] Failed to send to ${user.telegramId}:`, error);
+      failed++;
+    }
+  }
+
+  return { sent, failed };
+}
+
+/**
  * Calculate distance between two coordinates using Haversine formula
  */
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -274,9 +331,20 @@ function getAdminKeyboard(): Keyboard {
 function getOwnerKeyboard(): Keyboard {
   return new Keyboard()
     .text('🔍 Перевірити код')
+    .row()
     .text('📊 Статистика за 24г')
+    .text('📣 Розсилка')
     .row()
     .text('👥 Керування адмінами')
+    .resized();
+}
+
+/**
+ * Get keyboard for broadcast input (with cancel button)
+ */
+function getBroadcastKeyboard(): Keyboard {
+  return new Keyboard()
+    .text('⬅️ Скасувати')
     .resized();
 }
 
@@ -462,6 +530,7 @@ bot.on('message:text', async (ctx) => {
   if (text === '⬅️ Назад' && isOwner) {
     waitingForCode.delete(userId);
     waitingForAdminId.delete(userId);
+    waitingForBroadcast.delete(userId);
     await ctx.reply('🏠 Головне меню', { reply_markup: getOwnerKeyboard() });
     return;
   }
@@ -470,6 +539,7 @@ bot.on('message:text', async (ctx) => {
   if (text === '🔍 Перевірити код' && (isAdmin || isOwner)) {
     waitingForCode.add(userId);
     waitingForAdminId.delete(userId);
+    waitingForBroadcast.delete(userId);
     await ctx.reply(
       '🔍 Введи код купону у форматі *XX-00000* (наприклад, CO-77341):',
       { parse_mode: 'Markdown' }
@@ -481,6 +551,7 @@ bot.on('message:text', async (ctx) => {
   if (text === '📊 Статистика за 24г' && isOwner) {
     waitingForCode.delete(userId);
     waitingForAdminId.delete(userId);
+    waitingForBroadcast.delete(userId);
 
     const stats = await getStats(userId);
 
@@ -505,9 +576,52 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
+  // Handle "Broadcast" button (Owner only)
+  if (text === '📣 Розсилка' && isOwner) {
+    waitingForCode.delete(userId);
+    waitingForAdminId.delete(userId);
+    waitingForBroadcast.add(userId);
+
+    await ctx.reply(
+      '📣 *Розсилка повідомлень*\n\n' +
+        'Введи текст повідомлення, яке буде надіслано всім користувачам.\n\n' +
+        '💡 Підтримується Markdown форматування:\n' +
+        '`*жирний*` → *жирний*\n' +
+        '`_курсив_` → _курсив_\n\n' +
+        'Натисни *⬅️ Скасувати* щоб повернутися.',
+      { parse_mode: 'Markdown', reply_markup: getBroadcastKeyboard() }
+    );
+    return;
+  }
+
+  // Handle "Cancel" button during broadcast input
+  if (text === '⬅️ Скасувати' && waitingForBroadcast.has(userId)) {
+    waitingForBroadcast.delete(userId);
+    await ctx.reply('🏠 Повернулися до головного меню.', { reply_markup: getOwnerKeyboard() });
+    return;
+  }
+
+  // Handle broadcast message input (Owner only)
+  if (waitingForBroadcast.has(userId) && isOwner) {
+    waitingForBroadcast.delete(userId);
+
+    await ctx.reply('⏳ Розпочинаю розсилку...', { reply_markup: { remove_keyboard: true } });
+
+    const result = await sendBroadcast(bot, text, userId);
+
+    await ctx.reply(
+      `✅ *Розсилка завершена!*\n\n` +
+        `📨 Отримали: *${result.sent}* користувачів\n` +
+        `❌ Не доставлено: *${result.failed}* (заблокували бота)`,
+      { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+    );
+    return;
+  }
+
   // Handle "Admin Management" button (Owner only)
   if (text === '👥 Керування адмінами' && isOwner) {
     waitingForCode.delete(userId);
+    waitingForBroadcast.delete(userId);
     const admins = await getAdminList(userId);
 
     let message = '👥 *Керування адмінами*\n\n';

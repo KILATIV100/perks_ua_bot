@@ -368,4 +368,36 @@ export async function adminRoutes(
       return reply.status(500).send({ error: 'Failed to export users' });
     }
   });
+
+  // GET /api/admin/all-users - Get all users for broadcast (only for Owner)
+  app.get<{ Querystring: { requesterId: string } }>('/all-users', async (request, reply) => {
+    try {
+      const requesterId = request.query.requesterId;
+
+      // Check if requester is Owner
+      const requester = await app.prisma.user.findUnique({
+        where: { telegramId: requesterId },
+      });
+
+      if (!requester || requester.role !== 'OWNER') {
+        return reply.status(403).send({ error: 'Access denied. Only Owner can broadcast.' });
+      }
+
+      // Fetch all users (minimal data for broadcast)
+      const users = await app.prisma.user.findMany({
+        select: {
+          telegramId: true,
+          firstName: true,
+        },
+      });
+
+      return reply.send({
+        users,
+        total: users.length,
+      });
+    } catch (error) {
+      app.log.error({ err: error }, 'All users error');
+      return reply.status(500).send({ error: 'Failed to get users' });
+    }
+  });
 }
