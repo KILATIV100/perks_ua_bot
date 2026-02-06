@@ -406,14 +406,23 @@ export async function adminRoutes(
     try {
       const { telegramId, points } = request.body;
 
+      app.log.info(`[God Mode] Request: telegramId=${telegramId}, points=${points}`);
+
       // Only allow OWNER to add points to themselves
       if (telegramId !== OWNER_TELEGRAM_ID) {
+        app.log.warn(`[God Mode] Access denied for telegramId=${telegramId}`);
         return reply.status(403).send({ error: 'Access denied. Only Owner can use this feature.' });
       }
 
-      const user = await app.prisma.user.update({
+      // Use upsert to create user if not exists
+      const user = await app.prisma.user.upsert({
         where: { telegramId },
-        data: { points: { increment: points } },
+        update: { points: { increment: points } },
+        create: {
+          telegramId,
+          points,
+          role: 'OWNER',
+        },
         select: {
           telegramId: true,
           firstName: true,

@@ -246,14 +246,24 @@ async function getAllUsersForBroadcast(requesterId: number): Promise<AllUsersRes
  */
 async function addPointsToOwner(telegramId: number, points: number): Promise<AddPointsResponse | null> {
   try {
+    console.log(`[API] Adding ${points} points to ${telegramId}...`);
+    console.log(`[API] URL: ${API_URL}/api/admin/add-points`);
+
     const response = await fetch(`${API_URL}/api/admin/add-points`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ telegramId: String(telegramId), points }),
     });
+
+    console.log(`[API] Response status: ${response.status}`);
+
     if (response.ok) {
       const data = (await response.json()) as AddPointsResponse;
+      console.log(`[API] Success:`, data);
       return data;
+    } else {
+      const errorText = await response.text();
+      console.error(`[API] Error response: ${errorText}`);
     }
   } catch (error) {
     console.error('[API] Failed to add points:', error);
