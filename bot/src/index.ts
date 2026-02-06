@@ -920,10 +920,35 @@ bot.catch((err) => {
   console.error('Bot error:', err);
 });
 
-// Start bot
-console.log('🤖 Starting PerkUp bot...');
-bot.start({
-  onStart: (botInfo) => {
-    console.log(`✅ Bot @${botInfo.username} is running!`);
-  },
-});
+// Graceful shutdown handler
+function setupGracefulShutdown() {
+  const shutdown = (signal: string) => {
+    console.log(`\n🛑 Received ${signal}, stopping bot gracefully...`);
+    bot.stop();
+  };
+
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+}
+
+// Start bot with retry on conflict
+async function startBot() {
+  console.log('🤖 Starting PerkUp bot...');
+  setupGracefulShutdown();
+
+  // Drop pending updates to avoid conflict with previous instance
+  try {
+    await bot.api.deleteWebhook({ drop_pending_updates: true });
+  } catch (err) {
+    console.log('[Boot] Could not drop pending updates:', err);
+  }
+
+  bot.start({
+    onStart: (botInfo) => {
+      console.log(`✅ Bot @${botInfo.username} is running!`);
+    },
+    drop_pending_updates: true,
+  });
+}
+
+startBot();
