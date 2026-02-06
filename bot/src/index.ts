@@ -344,6 +344,31 @@ function markUserNotified(userId: number): void {
 }
 
 /**
+ * Sync user via API (with optional referrer)
+ */
+async function syncUserWithReferral(telegramId: number, firstName: string | undefined, username: string | undefined, referrerId?: string): Promise<void> {
+  try {
+    const body: Record<string, unknown> = {
+      telegramId: String(telegramId),
+      firstName,
+      username,
+    };
+    if (referrerId) {
+      body.referrerId = referrerId;
+    }
+
+    await fetch(`${API_URL}/api/user/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    console.log(`[Referral] Synced user ${telegramId} with referrer ${referrerId || 'none'}`);
+  } catch (error) {
+    console.error('[Referral] Failed to sync user:', error);
+  }
+}
+
+/**
  * Get User keyboard (basic - no WebApp, users use Menu Button instead)
  * WebApp via Keyboard doesn't pass initData correctly on some Telegram versions
  */
@@ -386,13 +411,30 @@ function getBroadcastKeyboard(): Keyboard {
     .resized();
 }
 
-// Start command
+// Start command (supports deep link referral: /start ref_TELEGRAM_ID)
 bot.command('start', async (ctx) => {
   const user = ctx.from;
   const userId = user?.id;
   const firstName = user?.first_name || 'друже';
 
   if (!userId) return;
+
+  // Parse referral parameter from deep link
+  const startParam = ctx.match; // grammY extracts the payload after /start
+  let referrerId: string | undefined;
+  if (startParam && typeof startParam === 'string' && startParam.startsWith('ref_')) {
+    referrerId = startParam.replace('ref_', '');
+    // Don't allow self-referral
+    if (referrerId === String(userId)) {
+      referrerId = undefined;
+    }
+  }
+
+  // If referral param present, sync user with referrer immediately
+  if (referrerId) {
+    console.log(`[Referral] User ${userId} arrived via referral from ${referrerId}`);
+    syncUserWithReferral(userId, user?.first_name, user?.username, referrerId);
+  }
 
   // Check user role
   const { isAdmin, isOwner } = await getUserRole(userId);
@@ -423,10 +465,14 @@ bot.command('start', async (ctx) => {
     return;
   }
 
-  // Regular user - use Menu Button for WebApp (no custom keyboard)
+  // Regular user - mention referral bonus if applicable
+  const referralNote = referrerId
+    ? `\n🎁 Ти отримав *+5 бонусних балів* за запрошенням друга!\n`
+    : '';
+
   await ctx.reply(
     `Привіт, ${firstName}! 👋\n\n` +
-      `Ласкаво просимо до *PerkUp* — твого помічника у світі кави! ☕\n\n` +
+      `Ласкаво просимо до *PerkUp* — твого помічника у світі кави! ☕\n${referralNote}\n` +
       `Тут ти можеш:\n` +
       `• Обрати найближчу кав'ярню\n` +
       `• Зробити замовлення онлайн\n` +

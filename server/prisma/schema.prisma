@@ -33,19 +33,21 @@ model Location {
 }
 
 model User {
-  id              String           @id @default(uuid())
-  telegramId      String           @unique
-  username        String?
-  firstName       String?
-  lastName        String?
-  points          Int              @default(0)
-  totalSpins      Int              @default(0)
-  role            UserRole         @default(USER)
-  lastSpin        DateTime?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  orders          Order[]
-  redemptionCodes RedemptionCode[]
+  id                String           @id @default(uuid())
+  telegramId        String           @unique
+  username          String?
+  firstName         String?
+  lastName          String?
+  points            Int              @default(0)
+  totalSpins        Int              @default(0)
+  role              UserRole         @default(USER)
+  lastSpin          DateTime?
+  referredBy        String?          // telegramId of the user who referred this one
+  referralBonusPaid Boolean          @default(false) // whether referrer received +10 for this user's first spin
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  orders            Order[]
+  redemptionCodes   RedemptionCode[]
 
   @@map("users")
 }

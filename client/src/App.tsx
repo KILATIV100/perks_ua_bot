@@ -44,6 +44,9 @@ interface TelegramTheme {
 // API base URL - MUST be set for cross-origin requests
 // Fallback to production URL if VITE_API_URL is not set
 const API_URL = import.meta.env.VITE_API_URL || 'https://backend-production-5ee9.up.railway.app';
+
+// Bot username for referral links
+const BOT_USERNAME = import.meta.env.VITE_BOT_USERNAME || '';
 console.log('[PerkUp] Environment:', import.meta.env.MODE);
 console.log('[PerkUp] API_URL:', API_URL);
 
@@ -255,6 +258,16 @@ function App() {
       return null;
     }
   };
+
+  const handleInvite = useCallback(() => {
+    if (!telegramUser || !BOT_USERNAME) return;
+
+    const referralLink = `https://t.me/${BOT_USERNAME}?start=ref_${telegramUser.id}`;
+    const shareText = 'Приєднуйся до PerkUp — крути Колесо Фортуни та отримуй безкоштовну каву! ☕🎡 Тримай +5 бонусних балів на старт!';
+    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent(shareText)}`;
+
+    WebApp.openTelegramLink(shareUrl);
+  }, [telegramUser]);
 
   const handleRedeem = async () => {
     if (!telegramUser || isRedeeming) return;
@@ -512,6 +525,28 @@ function App() {
                 </div>
               )}
             </div>
+
+            {/* Invite Friend Section */}
+            {BOT_USERNAME && telegramUser && (
+              <div className="mb-6 p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+                <h3 className="font-semibold mb-2 flex items-center gap-2" style={{ color: theme.textColor }}>
+                  <span>👥</span> Запроси друга
+                </h3>
+                <p className="text-sm mb-3" style={{ color: theme.hintColor }}>
+                  Запроси друга та отримай <b style={{ color: theme.textColor }}>+10 балів</b> після його першого обертання колеса. Друг отримає <b style={{ color: theme.textColor }}>+5 балів</b> на старт!
+                </p>
+                <button
+                  onClick={handleInvite}
+                  className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98]"
+                  style={{
+                    backgroundColor: '#2196F3',
+                    color: '#ffffff',
+                  }}
+                >
+                  📨 Запросити друга
+                </button>
+              </div>
+            )}
 
             {/* Wheel Section */}
             <div className="mb-6 text-center">
