@@ -46,7 +46,7 @@ interface TelegramTheme {
 const API_URL = import.meta.env.VITE_API_URL || 'https://backend-production-5ee9.up.railway.app';
 
 // Bot username for referral links
-const BOT_USERNAME = import.meta.env.VITE_BOT_USERNAME || '';
+const BOT_USERNAME = import.meta.env.VITE_BOT_USERNAME || 'perkup_ua_bot';
 console.log('[PerkUp] Environment:', import.meta.env.MODE);
 console.log('[PerkUp] API_URL:', API_URL);
 
@@ -262,8 +262,8 @@ function App() {
   const handleInvite = useCallback(() => {
     if (!telegramUser || !BOT_USERNAME) return;
 
-    const referralLink = `https://t.me/${BOT_USERNAME}?start=ref_${telegramUser.id}`;
-    const shareText = 'Приєднуйся до PerkUp — крути Колесо Фортуни та отримуй безкоштовну каву! ☕🎡 Тримай +5 бонусних балів на старт!';
+    const referralLink = `https://t.me/${BOT_USERNAME}?start=ref${telegramUser.id}`;
+    const shareText = 'Приєднуйся до PerkUp — крути Колесо Фортуни та отримуй безкоштовну каву! ☕🎡';
     const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent(shareText)}`;
 
     WebApp.openTelegramLink(shareUrl);
@@ -533,7 +533,7 @@ function App() {
                   <span>👥</span> Запроси друга
                 </h3>
                 <p className="text-sm mb-3" style={{ color: theme.hintColor }}>
-                  Запроси друга та отримай <b style={{ color: theme.textColor }}>+10 балів</b> після його першого обертання колеса. Друг отримає <b style={{ color: theme.textColor }}>+5 балів</b> на старт!
+                  Після першого обертання колеса другом ти отримаєш <b style={{ color: theme.textColor }}>+10 балів</b>, а друг — <b style={{ color: theme.textColor }}>+5 балів</b>!
                 </p>
                 <button
                   onClick={handleInvite}

@@ -43,7 +43,7 @@ model User {
   role              UserRole         @default(USER)
   lastSpin          DateTime?
   referredBy        String?          // telegramId of the user who referred this one
-  referralBonusPaid Boolean          @default(false) // whether referrer received +10 for this user's first spin
+  referralPoints    Int              @default(0)      // total referral bonus points earned
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
   orders            Order[]
