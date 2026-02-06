@@ -62,6 +62,13 @@ interface AllUsersResponse {
   total: number;
 }
 
+// Response for adding points
+interface AddPointsResponse {
+  success: boolean;
+  newBalance: number;
+  added: number;
+}
+
 // Environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const API_URL = process.env.API_URL || 'https://backend-production-5ee9.up.railway.app';
@@ -235,6 +242,26 @@ async function getAllUsersForBroadcast(requesterId: number): Promise<AllUsersRes
 }
 
 /**
+ * Add points to Owner (God Mode)
+ */
+async function addPointsToOwner(telegramId: number, points: number): Promise<AddPointsResponse | null> {
+  try {
+    const response = await fetch(`${API_URL}/api/admin/add-points`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegramId: String(telegramId), points }),
+    });
+    if (response.ok) {
+      const data = (await response.json()) as AddPointsResponse;
+      return data;
+    }
+  } catch (error) {
+    console.error('[API] Failed to add points:', error);
+  }
+  return null;
+}
+
+/**
  * Send broadcast message to all users
  */
 async function sendBroadcast(bot: Bot, message: string, requesterId: number): Promise<{ sent: number; failed: number }> {
@@ -331,6 +358,7 @@ function getAdminKeyboard(): Keyboard {
 function getOwnerKeyboard(): Keyboard {
   return new Keyboard()
     .text('🔍 Перевірити код')
+    .text('💰 +100 балів')
     .row()
     .text('📊 Статистика за 24г')
     .text('📣 Розсилка')
@@ -573,6 +601,27 @@ bot.on('message:text', async (ctx) => {
         `🕒 Згенеровано: ${generatedTime}`,
       { parse_mode: 'Markdown' }
     );
+    return;
+  }
+
+  // Handle "+100 points" button (Owner only - God Mode)
+  if (text === '💰 +100 балів' && isOwner) {
+    waitingForCode.delete(userId);
+    waitingForAdminId.delete(userId);
+    waitingForBroadcast.delete(userId);
+
+    const result = await addPointsToOwner(userId, 100);
+
+    if (result) {
+      await ctx.reply(
+        `✅ *Бали нараховано!*\n\n` +
+          `💰 Додано: *+${result.added}* балів\n` +
+          `🏦 Твій новий баланс: *${result.newBalance}* балів`,
+        { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+      );
+    } else {
+      await ctx.reply('❌ Не вдалося нарахувати бали. Спробуй пізніше.', { reply_markup: getOwnerKeyboard() });
+    }
     return;
   }
 

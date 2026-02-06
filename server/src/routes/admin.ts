@@ -400,4 +400,37 @@ export async function adminRoutes(
       return reply.status(500).send({ error: 'Failed to get users' });
     }
   });
+
+  // POST /api/admin/add-points - Add points to OWNER (God Mode)
+  app.post<{ Body: { telegramId: string; points: number } }>('/add-points', async (request, reply) => {
+    try {
+      const { telegramId, points } = request.body;
+
+      // Only allow OWNER to add points to themselves
+      if (telegramId !== OWNER_TELEGRAM_ID) {
+        return reply.status(403).send({ error: 'Access denied. Only Owner can use this feature.' });
+      }
+
+      const user = await app.prisma.user.update({
+        where: { telegramId },
+        data: { points: { increment: points } },
+        select: {
+          telegramId: true,
+          firstName: true,
+          points: true,
+        },
+      });
+
+      app.log.info(`[God Mode] Added ${points} points to Owner. New balance: ${user.points}`);
+
+      return reply.send({
+        success: true,
+        newBalance: user.points,
+        added: points,
+      });
+    } catch (error) {
+      app.log.error({ err: error }, 'Add points error');
+      return reply.status(500).send({ error: 'Failed to add points' });
+    }
+  });
 }
