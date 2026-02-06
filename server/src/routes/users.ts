@@ -53,6 +53,7 @@ const syncUserSchema = z.object({
   telegramId: z.union([z.number(), z.string()]).transform(String),
   username: z.string().optional(),
   firstName: z.string().optional(),
+  referrerId: z.union([z.number(), z.string()]).transform(String).optional(),
 });
 
 const spinSchema = z.object({
@@ -130,6 +131,22 @@ export async function userRoutes(
 
       const isNewUser = !existingUser;
 
+      // Determine referral bonus for new user
+      let referralPoints = 0;
+      let validReferrer = false;
+      if (isNewUser && body.referrerId && body.referrerId !== body.telegramId) {
+        // Check if referrer exists
+        const referrer = await app.prisma.user.findUnique({
+          where: { telegramId: body.referrerId },
+          select: { id: true },
+        });
+        if (referrer) {
+          referralPoints = 5;
+          validReferrer = true;
+          console.log(`[SYNC] Valid referrer ${body.referrerId} found, granting +5 bonus to new user`);
+        }
+      }
+
       const user = await app.prisma.user.upsert({
         where: { telegramId: body.telegramId },
         update: {
@@ -140,8 +157,9 @@ export async function userRoutes(
           telegramId: body.telegramId,
           username: body.username,
           firstName: body.firstName,
-          points: 0,
+          points: referralPoints,
           totalSpins: 0,
+          referredBy: validReferrer ? body.referrerId : null,
         },
         select: {
           id: true,
@@ -153,6 +171,7 @@ export async function userRoutes(
           lastSpin: true,
           role: true,
           createdAt: true,
+          referredBy: true,
         },
       });
 
@@ -163,12 +182,23 @@ export async function userRoutes(
         points: user.points,
         role: user.role,
         isNewUser,
+        referredBy: user.referredBy,
       });
 
       // Notify OWNER about new user
       if (isNewUser) {
         console.log('[SYNC] New user detected, notifying OWNER');
         notifyOwnerNewUser(body.firstName, body.telegramId);
+
+        // Notify referrer
+        if (validReferrer && body.referrerId) {
+          const userName = body.firstName || 'Новий користувач';
+          const referralMsg = `🎉 *${userName}* приєднався до PerkUp за твоїм запрошенням!\n\n` +
+            `Ти отримаєш *+10 балів* після першого обертання колеса цим другом.`;
+          sendTelegramMessage(Number(body.referrerId), referralMsg).catch((err) => {
+            console.log('[Telegram] Error notifying referrer:', err);
+          });
+        }
       }
 
       // telegramId is now a string, no conversion needed
@@ -318,6 +348,34 @@ export async function userRoutes(
       });
 
       app.log.info(`[Spin Success] telegramId: ${body.telegramId}, reward: ${reward}, total: ${updatedUser.points}, spins: ${updatedUser.totalSpins}`);
+
+      // Referral bonus: if this is the user's first spin and they were referred, give +10 to referrer
+      if (user.referredBy && !user.referralBonusPaid) {
+        try {
+          await app.prisma.$transaction([
+            app.prisma.user.update({
+              where: { telegramId: user.referredBy },
+              data: { points: { increment: 10 } },
+            }),
+            app.prisma.user.update({
+              where: { telegramId: body.telegramId },
+              data: { referralBonusPaid: true },
+            }),
+          ]);
+
+          app.log.info(`[Referral Bonus] +10 points to referrer ${user.referredBy} for user ${body.telegramId} first spin`);
+
+          // Notify referrer about the bonus
+          const spinnerName = updatedUser.firstName || 'Твій друг';
+          const referralBonusMsg = `🎁 *+10 балів за реферала!*\n\n` +
+            `${spinnerName} щойно крутнув колесо вперше — ти отримав бонус за запрошення!`;
+          sendTelegramMessage(Number(user.referredBy), referralBonusMsg).catch((err) => {
+            app.log.error({ err }, 'Failed to send referral bonus notification');
+          });
+        } catch (refError) {
+          app.log.error({ err: refError }, 'Failed to process referral bonus');
+        }
+      }
 
       // Send notification via Telegram bot
       const userName = updatedUser.firstName || 'Друже';
