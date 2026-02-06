@@ -76,8 +76,8 @@ const API_URL = process.env.API_URL || 'https://backend-production-5ee9.up.railw
 // WebApp URL - perkup.com.ua
 const WEB_APP_URL = 'https://perkup.com.ua';
 
-// Owner Telegram ID
-const OWNER_ID = 7363233852;
+// Owner Telegram ID (from env or fallback)
+const OWNER_ID = Number(process.env.OWNER_ID) || 7363233852;
 
 if (!BOT_TOKEN) {
   throw new Error('BOT_TOKEN environment variable is required');
@@ -369,13 +369,12 @@ async function syncUserWithReferral(telegramId: number, firstName: string | unde
 }
 
 /**
- * Get User keyboard (basic - no WebApp, users use Menu Button instead)
- * WebApp via Keyboard doesn't pass initData correctly on some Telegram versions
+ * Get User keyboard with invite button
  */
-function getUserKeyboard(): Keyboard | undefined {
-  // Regular users should use the Menu Button (configured in BotFather)
-  // which correctly passes initData to the Mini App
-  return undefined;
+function getUserKeyboard(): Keyboard {
+  return new Keyboard()
+    .text('🤝 Запросити друга')
+    .resized();
 }
 
 /**
@@ -411,7 +410,7 @@ function getBroadcastKeyboard(): Keyboard {
     .resized();
 }
 
-// Start command (supports deep link referral: /start ref_TELEGRAM_ID)
+// Start command (supports deep link referral: /start ref{TELEGRAM_ID})
 bot.command('start', async (ctx) => {
   const user = ctx.from;
   const userId = user?.id;
@@ -419,14 +418,17 @@ bot.command('start', async (ctx) => {
 
   if (!userId) return;
 
-  // Parse referral parameter from deep link
+  // Parse referral parameter from deep link (format: ref123456)
   const startParam = ctx.match; // grammY extracts the payload after /start
   let referrerId: string | undefined;
-  if (startParam && typeof startParam === 'string' && startParam.startsWith('ref_')) {
-    referrerId = startParam.replace('ref_', '');
-    // Don't allow self-referral
-    if (referrerId === String(userId)) {
-      referrerId = undefined;
+  if (startParam && typeof startParam === 'string') {
+    const refMatch = startParam.match(/^ref(\d+)$/);
+    if (refMatch) {
+      referrerId = refMatch[1];
+      // Don't allow self-referral
+      if (Number(referrerId) === Number(userId)) {
+        referrerId = undefined;
+      }
     }
   }
 
@@ -465,9 +467,9 @@ bot.command('start', async (ctx) => {
     return;
   }
 
-  // Regular user - mention referral bonus if applicable
+  // Regular user
   const referralNote = referrerId
-    ? `\n🎁 Ти отримав *+5 бонусних балів* за запрошенням друга!\n`
+    ? `\n🤝 Бро, ти прийшов від друга! Після першого крутка колеса ви обоє отримаєте бонуси.\n`
     : '';
 
   await ctx.reply(
@@ -482,7 +484,7 @@ bot.command('start', async (ctx) => {
       `Натисни кнопку *PerkUP* зліва від поля вводу, щоб почати! 👇`,
     {
       parse_mode: 'Markdown',
-      reply_markup: { remove_keyboard: true },
+      reply_markup: getUserKeyboard(),
     }
   );
 });
@@ -491,10 +493,10 @@ bot.command('start', async (ctx) => {
 bot.command('help', async (ctx) => {
   const userId = ctx.from?.id;
 
-  let keyboard: Keyboard | { remove_keyboard: true } | undefined;
+  let keyboard: Keyboard | undefined;
   if (userId) {
     const { isAdmin, isOwner } = await getUserRole(userId);
-    keyboard = isOwner ? getOwnerKeyboard() : isAdmin ? getAdminKeyboard() : { remove_keyboard: true as const };
+    keyboard = isOwner ? getOwnerKeyboard() : isAdmin ? getAdminKeyboard() : getUserKeyboard();
   }
 
   await ctx.reply(
@@ -616,6 +618,29 @@ bot.on('message:text', async (ctx) => {
     waitingForAdminId.delete(userId);
     waitingForBroadcast.delete(userId);
     await ctx.reply('🏠 Головне меню', { reply_markup: getOwnerKeyboard() });
+    return;
+  }
+
+  // Handle "Invite Friend" button (regular users)
+  if (text === '🤝 Запросити друга') {
+    const refLink = `https://t.me/perkup_ua_bot?start=ref${userId}`;
+    await ctx.reply(
+      `🤝 *Запроси друга до PerkUp!*\n\n` +
+        `Твоє реферальне посилання:\n` +
+        `\`${refLink}\`\n\n` +
+        `Після першого обертання колеса другом:\n` +
+        `• Друг отримає *+5 балів*\n` +
+        `• Ти отримаєш *+10 балів*\n\n` +
+        `Надішли це посилання другу! 👇`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '📨 Надіслати другу', url: `https://t.me/share/url?url=${encodeURIComponent(refLink)}&text=${encodeURIComponent('Приєднуйся до PerkUp — крути Колесо Фортуни та отримуй безкоштовну каву! ☕🎡')}` },
+          ]],
+        },
+      }
+    );
     return;
   }
 
@@ -832,11 +857,11 @@ bot.on('message:text', async (ctx) => {
   }
 
   // Default response - show appropriate keyboard based on role
-  const keyboard: Keyboard | { remove_keyboard: true } = isOwner
+  const keyboard: Keyboard = isOwner
     ? getOwnerKeyboard()
     : isAdmin
       ? getAdminKeyboard()
-      : { remove_keyboard: true as const };
+      : getUserKeyboard();
 
   await ctx.reply(
     `Щоб зробити замовлення, натисни кнопку *PerkUP* зліва від поля вводу! 👇\n\n` +
@@ -920,53 +945,22 @@ bot.catch((err) => {
   console.error('Bot error:', err);
 });
 
-// Graceful shutdown handler
-function setupGracefulShutdown() {
-  const shutdown = (signal: string) => {
-    console.log(`\n🛑 Received ${signal}, stopping bot gracefully...`);
-    bot.stop();
-  };
+// Graceful shutdown
+process.once('SIGINT', () => { console.log('🛑 SIGINT received, stopping...'); bot.stop(); });
+process.once('SIGTERM', () => { console.log('🛑 SIGTERM received, stopping...'); bot.stop(); });
 
-  process.once('SIGINT', () => shutdown('SIGINT'));
-  process.once('SIGTERM', () => shutdown('SIGTERM'));
-}
-
-// Helper: wait ms
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// Start bot with retry on 409 conflict
-async function startBot(retries = 5) {
+// Start bot with delay to let old instance shut down
+async function startBot() {
   console.log('🤖 Starting PerkUp bot...');
-  setupGracefulShutdown();
+  console.log('[Boot] Waiting 2s for old instance to stop...');
+  await new Promise(r => setTimeout(r, 2000));
 
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      // Wait before first attempt to let old instance shut down
-      if (attempt === 1) {
-        console.log('[Boot] Waiting 3s for old instance to stop...');
-        await sleep(3000);
-      }
-
-      await bot.start({
-        onStart: (botInfo) => {
-          console.log(`✅ Bot @${botInfo.username} is running!`);
-        },
-        drop_pending_updates: true,
-      });
-      return; // bot.start() resolved = bot stopped normally
-    } catch (err: unknown) {
-      const is409 = err instanceof Error && 'error_code' in err && (err as { error_code: number }).error_code === 409;
-
-      if (is409 && attempt < retries) {
-        const delay = attempt * 3000; // 3s, 6s, 9s, 12s
-        console.log(`[Boot] 409 conflict (attempt ${attempt}/${retries}), retrying in ${delay / 1000}s...`);
-        await sleep(delay);
-      } else {
-        console.error(`[Boot] Failed to start bot after ${attempt} attempts:`, err);
-        process.exit(1);
-      }
-    }
-  }
+  bot.start({
+    onStart: (botInfo) => {
+      console.log(`✅ Bot @${botInfo.username} is running!`);
+    },
+    drop_pending_updates: true,
+  });
 }
 
 startBot();

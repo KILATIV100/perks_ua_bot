@@ -131,19 +131,16 @@ export async function userRoutes(
 
       const isNewUser = !existingUser;
 
-      // Determine referral bonus for new user
-      let referralPoints = 0;
-      let validReferrer = false;
+      // Check if referrer is valid for new user
+      let validReferrerId: string | null = null;
       if (isNewUser && body.referrerId && body.referrerId !== body.telegramId) {
-        // Check if referrer exists
         const referrer = await app.prisma.user.findUnique({
           where: { telegramId: body.referrerId },
           select: { id: true },
         });
         if (referrer) {
-          referralPoints = 5;
-          validReferrer = true;
-          console.log(`[SYNC] Valid referrer ${body.referrerId} found, granting +5 bonus to new user`);
+          validReferrerId = body.referrerId;
+          console.log(`[SYNC] Valid referrer ${body.referrerId} found for new user`);
         }
       }
 
@@ -157,9 +154,9 @@ export async function userRoutes(
           telegramId: body.telegramId,
           username: body.username,
           firstName: body.firstName,
-          points: referralPoints,
+          points: 0,
           totalSpins: 0,
-          referredBy: validReferrer ? body.referrerId : null,
+          referredBy: validReferrerId,
         },
         select: {
           id: true,
@@ -190,12 +187,12 @@ export async function userRoutes(
         console.log('[SYNC] New user detected, notifying OWNER');
         notifyOwnerNewUser(body.firstName, body.telegramId);
 
-        // Notify referrer
-        if (validReferrer && body.referrerId) {
+        // Notify referrer that their friend joined
+        if (validReferrerId) {
           const userName = body.firstName || 'Новий користувач';
           const referralMsg = `🎉 *${userName}* приєднався до PerkUp за твоїм запрошенням!\n\n` +
             `Ти отримаєш *+10 балів* після першого обертання колеса цим другом.`;
-          sendTelegramMessage(Number(body.referrerId), referralMsg).catch((err) => {
+          sendTelegramMessage(Number(validReferrerId), referralMsg).catch((err) => {
             console.log('[Telegram] Error notifying referrer:', err);
           });
         }
@@ -349,21 +346,32 @@ export async function userRoutes(
 
       app.log.info(`[Spin Success] telegramId: ${body.telegramId}, reward: ${reward}, total: ${updatedUser.points}, spins: ${updatedUser.totalSpins}`);
 
-      // Referral bonus: if this is the user's first spin and they were referred, give +10 to referrer
-      if (user.referredBy && !user.referralBonusPaid) {
+      // Referral bonus: first spin by a referred user → +5 to new user, +10 to referrer
+      if (user.referredBy && user.totalSpins === 0) {
         try {
           await app.prisma.$transaction([
-            app.prisma.user.update({
-              where: { telegramId: user.referredBy },
-              data: { points: { increment: 10 } },
-            }),
+            // +5 bonus to the new user
             app.prisma.user.update({
               where: { telegramId: body.telegramId },
-              data: { referralBonusPaid: true },
+              data: {
+                points: { increment: 5 },
+                referralPoints: { increment: 5 },
+              },
+            }),
+            // +10 bonus to the referrer
+            app.prisma.user.update({
+              where: { telegramId: user.referredBy },
+              data: {
+                points: { increment: 10 },
+                referralPoints: { increment: 10 },
+              },
             }),
           ]);
 
-          app.log.info(`[Referral Bonus] +10 points to referrer ${user.referredBy} for user ${body.telegramId} first spin`);
+          // Update balance in response to reflect the +5 bonus
+          updatedUser.points += 5;
+
+          app.log.info(`[Referral Bonus] +5 to user ${body.telegramId}, +10 to referrer ${user.referredBy}`);
 
           // Notify referrer about the bonus
           const spinnerName = updatedUser.firstName || 'Твій друг';
@@ -386,9 +394,13 @@ export async function userRoutes(
         app.log.error({ err }, 'Failed to send spin notification');
       });
 
+      // Include referral bonus info in response
+      const isFirstReferralSpin = user.referredBy && user.totalSpins === 0;
+
       return reply.send({
         success: true,
         reward,
+        referralBonus: isFirstReferralSpin ? 5 : 0,
         newBalance: updatedUser.points,
         nextSpinAt: new Date(now.getTime() + SPIN_COOLDOWN_MS).toISOString(),
       });
