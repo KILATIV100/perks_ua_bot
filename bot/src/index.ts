@@ -931,24 +931,42 @@ function setupGracefulShutdown() {
   process.once('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-// Start bot with retry on conflict
-async function startBot() {
+// Helper: wait ms
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Start bot with retry on 409 conflict
+async function startBot(retries = 5) {
   console.log('🤖 Starting PerkUp bot...');
   setupGracefulShutdown();
 
-  // Drop pending updates to avoid conflict with previous instance
-  try {
-    await bot.api.deleteWebhook({ drop_pending_updates: true });
-  } catch (err) {
-    console.log('[Boot] Could not drop pending updates:', err);
-  }
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      // Wait before first attempt to let old instance shut down
+      if (attempt === 1) {
+        console.log('[Boot] Waiting 3s for old instance to stop...');
+        await sleep(3000);
+      }
 
-  bot.start({
-    onStart: (botInfo) => {
-      console.log(`✅ Bot @${botInfo.username} is running!`);
-    },
-    drop_pending_updates: true,
-  });
+      await bot.start({
+        onStart: (botInfo) => {
+          console.log(`✅ Bot @${botInfo.username} is running!`);
+        },
+        drop_pending_updates: true,
+      });
+      return; // bot.start() resolved = bot stopped normally
+    } catch (err: unknown) {
+      const is409 = err instanceof Error && 'error_code' in err && (err as { error_code: number }).error_code === 409;
+
+      if (is409 && attempt < retries) {
+        const delay = attempt * 3000; // 3s, 6s, 9s, 12s
+        console.log(`[Boot] 409 conflict (attempt ${attempt}/${retries}), retrying in ${delay / 1000}s...`);
+        await sleep(delay);
+      } else {
+        console.error(`[Boot] Failed to start bot after ${attempt} attempts:`, err);
+        process.exit(1);
+      }
+    }
+  }
 }
 
 startBot();
