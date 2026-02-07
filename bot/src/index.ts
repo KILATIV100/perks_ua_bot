@@ -994,18 +994,40 @@ bot.catch((err) => {
 process.once('SIGINT', () => { console.log('🛑 SIGINT received, stopping...'); bot.stop(); });
 process.once('SIGTERM', () => { console.log('🛑 SIGTERM received, stopping...'); bot.stop(); });
 
-// Start bot with delay to let old instance shut down
+// Start bot with retry logic for 409 conflicts during Railway deployments
 async function startBot() {
   console.log('🤖 Starting PerkUp bot...');
-  console.log('[Boot] Waiting 2s for old instance to stop...');
-  await new Promise(r => setTimeout(r, 2000));
 
-  bot.start({
-    onStart: (botInfo) => {
-      console.log(`✅ Bot @${botInfo.username} is running!`);
-    },
-    drop_pending_updates: true,
-  });
+  const MAX_RETRIES = 5;
+  const INITIAL_DELAY = 3000; // 3s
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const delay = INITIAL_DELAY * attempt; // 3s, 6s, 9s, 12s, 15s
+    console.log(`[Boot] Attempt ${attempt}/${MAX_RETRIES}: waiting ${delay / 1000}s for old instance to stop...`);
+    await new Promise(r => setTimeout(r, delay));
+
+    try {
+      // Delete any existing webhook/getUpdates session before starting
+      await bot.api.deleteWebhook({ drop_pending_updates: true });
+      console.log('[Boot] Webhook cleared, starting polling...');
+
+      await bot.start({
+        onStart: (botInfo) => {
+          console.log(`✅ Bot @${botInfo.username} is running!`);
+        },
+        drop_pending_updates: true,
+      });
+      return; // started successfully
+    } catch (err: unknown) {
+      const is409 = err instanceof Error && err.message.includes('409');
+      if (is409 && attempt < MAX_RETRIES) {
+        console.log(`[Boot] Got 409 conflict, old instance still running. Retrying...`);
+        continue;
+      }
+      console.error(`[Boot] Failed to start bot after ${attempt} attempts:`, err);
+      throw err;
+    }
+  }
 }
 
 startBot();
