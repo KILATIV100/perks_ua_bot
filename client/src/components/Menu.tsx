@@ -27,6 +27,7 @@ interface MenuProps {
     buttonTextColor: string;
     secondaryBgColor: string;
   };
+  canPreorder?: boolean;
 }
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -36,7 +37,7 @@ const CATEGORY_ICONS: Record<string, string> = {
   'Випічка': '🥐',
 };
 
-export function Menu({ apiUrl, cart, onCartChange, theme }: MenuProps) {
+export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: MenuProps) {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
@@ -117,6 +118,13 @@ export function Menu({ apiUrl, cart, onCartChange, theme }: MenuProps) {
 
   return (
     <div>
+      {/* View-only banner */}
+      {!canPreorder && (
+        <div className="mb-4 p-3 rounded-xl text-center text-sm" style={{ backgroundColor: '#FFF8E1', color: '#92400e' }}>
+          📍 Замовляйте на місці! Попереднє замовлення тут недоступне.
+        </div>
+      )}
+
       {/* Category tabs */}
       <div className="flex gap-2 overflow-x-auto pb-3 mb-4 scrollbar-hide">
         {categories.map(cat => (
@@ -169,38 +177,40 @@ export function Menu({ apiUrl, cart, onCartChange, theme }: MenuProps) {
                 </p>
               </div>
 
-              {/* Add/remove buttons */}
-              <div className="flex items-center gap-2 flex-shrink-0">
-                {qty > 0 ? (
-                  <>
-                    <button
-                      onClick={() => removeFromCart(product.id)}
-                      className="w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold transition-all active:scale-90"
-                      style={{ backgroundColor: theme.hintColor + '30', color: theme.textColor }}
-                    >
-                      -
-                    </button>
-                    <span className="w-6 text-center font-bold text-sm" style={{ color: theme.textColor }}>
-                      {qty}
-                    </span>
+              {/* Add/remove buttons (only if preorder is available) */}
+              {canPreorder && (
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {qty > 0 ? (
+                    <>
+                      <button
+                        onClick={() => removeFromCart(product.id)}
+                        className="w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold transition-all active:scale-90"
+                        style={{ backgroundColor: theme.hintColor + '30', color: theme.textColor }}
+                      >
+                        -
+                      </button>
+                      <span className="w-6 text-center font-bold text-sm" style={{ color: theme.textColor }}>
+                        {qty}
+                      </span>
+                      <button
+                        onClick={() => addToCart(product)}
+                        className="w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold transition-all active:scale-90"
+                        style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+                      >
+                        +
+                      </button>
+                    </>
+                  ) : (
                     <button
                       onClick={() => addToCart(product)}
-                      className="w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold transition-all active:scale-90"
-                      style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+                      className="px-4 py-2 rounded-xl text-sm font-medium transition-all active:scale-95"
+                      style={{ backgroundColor: theme.buttonColor + '15', color: theme.buttonColor }}
                     >
                       +
                     </button>
-                  </>
-                ) : (
-                  <button
-                    onClick={() => addToCart(product)}
-                    className="px-4 py-2 rounded-xl text-sm font-medium transition-all active:scale-95"
-                    style={{ backgroundColor: theme.buttonColor + '15', color: theme.buttonColor }}
-                  >
-                    +
-                  </button>
-                )}
-              </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}

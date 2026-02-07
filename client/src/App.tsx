@@ -16,6 +16,7 @@ interface Location {
   long: number | null;
   address: string | null;
   status: LocationStatus;
+  canPreorder: boolean;
 }
 
 interface TelegramUser {
@@ -417,7 +418,7 @@ function App() {
                     Змінити
                   </button>
                 </div>
-                <Menu apiUrl={API_URL} cart={cart} onCartChange={setCart} theme={theme} />
+                <Menu apiUrl={API_URL} cart={cart} onCartChange={setCart} theme={theme} canPreorder={selectedLocation.canPreorder} />
               </>
             ) : (
               <div className="text-center py-12">
@@ -610,7 +611,7 @@ function App() {
       </main>
 
       {/* Floating Cart Button */}
-      {activeTab === 'menu' && cartItemCount > 0 && selectedLocation && (
+      {activeTab === 'menu' && cartItemCount > 0 && selectedLocation && selectedLocation.canPreorder && (
         <div className="fixed bottom-6 left-4 right-4 z-30">
           <button
             onClick={() => setShowCheckout(true)}

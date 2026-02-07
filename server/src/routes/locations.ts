@@ -15,6 +15,7 @@ export async function locationRoutes(
         long: true,
         address: true,
         status: true,
+        canPreorder: true,
       },
     });
 
@@ -34,6 +35,7 @@ export async function locationRoutes(
         long: true,
         address: true,
         status: true,
+        canPreorder: true,
       },
     });
 

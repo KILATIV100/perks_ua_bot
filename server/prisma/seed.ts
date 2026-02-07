@@ -8,6 +8,7 @@ interface LocationSeed {
   long: number | null;
   address: string;
   status: LocationStatus;
+  canPreorder: boolean;
 }
 
 const locations: LocationSeed[] = [
@@ -17,6 +18,7 @@ const locations: LocationSeed[] = [
     long: 30.78219892858682,
     address: 'ТРЦ Mark Mall, Бровари',
     status: 'active',
+    canPreorder: false,
   },
   {
     name: 'Парк "Приозерний"',
@@ -24,6 +26,7 @@ const locations: LocationSeed[] = [
     long: 30.754029265863245,
     address: 'Парк Приозерний, Бровари',
     status: 'active',
+    canPreorder: true,
   },
   {
     name: 'ЖК "Лісовий квартал"',
@@ -31,6 +34,7 @@ const locations: LocationSeed[] = [
     long: 30.783235338021694,
     address: 'ЖК Лісовий квартал, Бровари',
     status: 'coming_soon',
+    canPreorder: false,
   },
 ];
 
