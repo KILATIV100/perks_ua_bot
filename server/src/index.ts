@@ -120,7 +120,7 @@ const ensureOwnerExists = async (): Promise<void> => {
 
 // Auto-seed products if database is empty
 const autoSeedProducts = async (): Promise<void> => {
-  console.log('[AutoSeed] Checking database...');
+  console.log('[AutoSeed] Checking database for products...');
   try {
     const productCount = await prisma.product.count();
     console.log(`[AutoSeed] Products in DB check: ${productCount}`);
