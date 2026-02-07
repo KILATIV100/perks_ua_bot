@@ -6,7 +6,7 @@ export async function productRoutes(
 ): Promise<void> {
   // GET /api/products - Get all active products
   app.get('/', async (request, reply) => {
-    console.log(`[Products] GET /api/products request from origin: ${request.headers.origin || 'none'}`);
+    console.log(`[Products] Handling GET /api/products request, origin: ${request.headers.origin || 'none'}, url: ${request.url}`);
     try {
       const products = await app.prisma.product.findMany({
         where: { isActive: true },
