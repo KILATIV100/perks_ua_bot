@@ -5,8 +5,7 @@ export async function productRoutes(
   _opts: FastifyPluginOptions
 ): Promise<void> {
   // GET /api/products - Get all active products
-  app.get('', async (request, reply) => {
-    console.log(`[Products] Handling GET /api/products request, origin: ${request.headers.origin || 'none'}, url: ${request.url}`);
+  app.get('', async (_request, reply) => {
     try {
       const products = await app.prisma.product.findMany({
         where: { isActive: true },
@@ -21,8 +20,6 @@ export async function productRoutes(
           imageUrl: true,
         },
       });
-
-      app.log.info(`Fetched products count: ${products.length}`);
 
       // Group by category
       const categories = new Map<string, typeof products>();

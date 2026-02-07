@@ -11,13 +11,10 @@ const OWNER_TELEGRAM_ID = '7363233852';
  * Send message to user via Telegram Bot
  */
 async function sendTelegramMessage(chatId: number | string, text: string): Promise<void> {
-  if (!BOT_TOKEN) {
-    console.log('[Telegram] BOT_TOKEN not set, skipping notification');
-    return;
-  }
+  if (!BOT_TOKEN) return;
 
   try {
-    const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -26,12 +23,8 @@ async function sendTelegramMessage(chatId: number | string, text: string): Promi
         parse_mode: 'Markdown',
       }),
     });
-
-    if (!response.ok) {
-      console.log(`[Telegram] Failed to send message: ${response.status}`);
-    }
-  } catch (error) {
-    console.log('[Telegram] Error sending message:', error);
+  } catch {
+    // silent
   }
 }
 
@@ -43,9 +36,7 @@ async function notifyOwnerNewUser(firstName: string | undefined, telegramId: str
     `👤 Ім'я: ${firstName || 'Невідомо'}\n` +
     `🆔 ID: \`${telegramId}\``;
 
-  sendTelegramMessage(OWNER_TELEGRAM_ID, message).catch((err) => {
-    console.log('[Telegram] Error notifying owner about new user:', err);
-  });
+  sendTelegramMessage(OWNER_TELEGRAM_ID, message).catch(() => {});
 }
 
 // Validation schemas - telegramId can be number or string
@@ -113,15 +104,7 @@ export async function userRoutes(
   // POST /api/user/sync - Sync user data from Telegram
   app.post('/sync', async (request, reply) => {
     try {
-      console.log('[SYNC] Raw body:', JSON.stringify(request.body));
-
       const body = syncUserSchema.parse(request.body);
-
-      console.log('[SYNC] Parsed data:', {
-        telegramId: body.telegramId,
-        username: body.username || 'N/A',
-        firstName: body.firstName || 'N/A',
-      });
 
       // Check if user exists (to detect new users)
       const existingUser = await app.prisma.user.findUnique({
@@ -140,7 +123,6 @@ export async function userRoutes(
         });
         if (referrer) {
           validReferrerId = body.referrerId;
-          console.log(`[SYNC] Valid referrer ${body.referrerId} found for new user`);
         }
       }
 
@@ -172,19 +154,8 @@ export async function userRoutes(
         },
       });
 
-      console.log('[SYNC] User synced:', {
-        id: user.id,
-        telegramId: user.telegramId,
-        firstName: user.firstName,
-        points: user.points,
-        role: user.role,
-        isNewUser,
-        referredBy: user.referredBy,
-      });
-
       // Notify OWNER about new user
       if (isNewUser) {
-        console.log('[SYNC] New user detected, notifying OWNER');
         notifyOwnerNewUser(body.firstName, body.telegramId);
 
         // Notify referrer that their friend joined
@@ -192,9 +163,7 @@ export async function userRoutes(
           const userName = body.firstName || 'Новий користувач';
           const referralMsg = `🎉 *${userName}* приєднався до PerkUp за твоїм запрошенням!\n\n` +
             `Ти отримаєш *+10 балів* після першого обертання колеса цим другом.`;
-          sendTelegramMessage(Number(validReferrerId), referralMsg).catch((err) => {
-            console.log('[Telegram] Error notifying referrer:', err);
-          });
+          sendTelegramMessage(Number(validReferrerId), referralMsg).catch(() => {});
         }
       }
 
@@ -203,7 +172,6 @@ export async function userRoutes(
         user,
       });
     } catch (error) {
-      console.error('[SYNC] Error:', error);
       app.log.error({ err: error }, 'User sync error');
       if (error instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Invalid request data', details: error.errors });

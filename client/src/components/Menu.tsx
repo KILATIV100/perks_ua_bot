@@ -52,19 +52,15 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
 
   const fetchProducts = async (attempt = 1) => {
     const url = `${apiUrl.replace(/\/$/, '')}/api/products`;
-    console.log(`[Menu] Fetching products from: ${url} (attempt ${attempt})`);
+    console.log(`[Menu] Fetching from ${url}`);
     try {
       setLoading(true);
       setFetchError(false);
-      console.log('[Menu] Requesting URL:', url);
       const response = await axios.get<{ products: Product[] }>(url);
-      console.log(`[Menu] Got ${response.data.products?.length || 0} products`);
       setProducts(response.data.products || []);
     } catch (err) {
-      console.error(`[Menu] Failed to fetch products (attempt ${attempt}):`, err);
-      // Retry once after 2s on failure (server may still be starting)
+      console.error('[Menu] Fetch failed:', err);
       if (attempt < 2) {
-        console.log('[Menu] Retrying in 2s...');
         await new Promise(r => setTimeout(r, 2000));
         return fetchProducts(attempt + 1);
       }
