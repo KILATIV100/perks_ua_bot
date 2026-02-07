@@ -51,11 +51,12 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
   const [fetchError, setFetchError] = useState(false);
 
   const fetchProducts = async (attempt = 1) => {
-    const url = `${apiUrl.replace(/\/$/, '')}/api/products/`;
+    const url = `${apiUrl.replace(/\/$/, '')}/api/products`;
     console.log(`[Menu] Fetching products from: ${url} (attempt ${attempt})`);
     try {
       setLoading(true);
       setFetchError(false);
+      console.log('[Menu] Requesting URL:', url);
       const response = await axios.get<{ products: Product[] }>(url);
       console.log(`[Menu] Got ${response.data.products?.length || 0} products`);
       setProducts(response.data.products || []);
