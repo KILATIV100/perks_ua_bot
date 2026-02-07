@@ -120,12 +120,10 @@ const ensureOwnerExists = async (): Promise<void> => {
 
 // Auto-seed products if database is empty
 const autoSeedProducts = async (): Promise<void> => {
-  console.log('[AutoSeed] Checking database for products...');
   try {
     const productCount = await prisma.product.count();
-    console.log(`[AutoSeed] Products in DB check: ${productCount}`);
+    console.log(`[Server] Product count in DB: ${productCount}`);
     if (productCount === 0) {
-      console.log('[AutoSeed] No products found, seeding...');
       const products = [
         // ===== Кава =====
         { name: 'Еспресо', description: null, volume: '110 мл', price: 40, category: 'Кава', imageUrl: null },
@@ -207,14 +205,13 @@ const autoSeedProducts = async (): Promise<void> => {
       ];
 
       await prisma.product.createMany({ data: products });
-      console.log(`[AutoSeed] Created ${products.length} products`);
+      console.log(`[Server] Seeded ${products.length} products`);
     }
 
     // Auto-seed locations if empty
     const locationCount = await prisma.location.count();
-    console.log(`[AutoSeed] Current locations in DB: ${locationCount}`);
+    console.log(`[Server] Location count in DB: ${locationCount}`);
     if (locationCount === 0) {
-      console.log('[AutoSeed] No locations found, seeding...');
       const locations = [
         { name: 'Mark Mall', lat: 50.51485367479439, long: 30.78219892858682, address: 'ТРЦ Mark Mall, Бровари', status: 'active' as const, canPreorder: false },
         { name: 'Парк "Приозерний"', lat: 50.50128659421246, long: 30.754029265863245, address: 'Парк Приозерний, Бровари', status: 'active' as const, canPreorder: true },
@@ -223,10 +220,10 @@ const autoSeedProducts = async (): Promise<void> => {
       for (const loc of locations) {
         await prisma.location.create({ data: loc });
       }
-      console.log(`[AutoSeed] Created ${locations.length} locations`);
+      console.log(`[Server] Seeded ${locations.length} locations`);
     }
   } catch (error) {
-    console.error('[AutoSeed] Error:', error);
+    console.error('[Server] AutoSeed error:', error);
   }
 };
 
@@ -235,23 +232,19 @@ const start = async (): Promise<void> => {
   try {
     // Verify database connection on startup
     await prisma.$connect();
-    console.log('Connected to DB successfully');
+    console.log('[Server] DB connected');
 
-    // Ensure owner exists
     await ensureOwnerExists();
-
-    // Auto-seed if DB is empty
     await autoSeedProducts();
 
-    // Log all registered routes for debugging
-    const routes = app.printRoutes();
-    console.log('[Routes] Registered routes:\n' + routes);
+    // Log registered routes so 404s are easy to debug
+    console.log('[Server] Routes:\n' + app.printRoutes());
 
     const port = parseInt(process.env.PORT || '3000', 10);
     const host = '0.0.0.0';
 
     await app.listen({ port, host });
-    console.log(`🚀 Server running on http://${host}:${port}`);
+    console.log(`[Server] Running on http://${host}:${port}`);
   } catch (err) {
     console.error('❌ Failed to start server:', err);
     app.log.error(err);
