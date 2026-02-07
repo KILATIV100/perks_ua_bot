@@ -94,6 +94,10 @@ export async function orderRoutes(
       return reply.status(400).send({ error: 'Location is not yet available for orders' });
     }
 
+    if (!location.canPreorder) {
+      return reply.status(400).send({ error: 'Попереднє замовлення недоступне для цієї локації. Замовляйте на місці!' });
+    }
+
     // Calculate total price
     const totalPrice = items.reduce(
       (sum, item) => sum + item.price * item.quantity,
