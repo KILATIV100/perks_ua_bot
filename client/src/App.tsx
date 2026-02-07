@@ -155,11 +155,13 @@ function App() {
     WebApp.setBackgroundColor(theme.secondaryBgColor);
   }, [theme]);
 
-  // Sync user with backend
+  // Sync user with backend (works for Telegram, localStorage fallback, and URL param users)
   useEffect(() => {
     if (telegramUser) {
-      console.log('[PerkUp] Syncing user with backend...');
+      console.log('[PerkUp] Syncing user with backend, id:', telegramUser.id, 'source:', WebApp.initDataUnsafe?.user ? 'telegram' : 'fallback');
       syncUser();
+    } else {
+      console.log('[PerkUp] No user to sync');
     }
   }, [telegramUser]);
 

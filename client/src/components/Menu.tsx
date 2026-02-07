@@ -51,7 +51,7 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
   const [fetchError, setFetchError] = useState(false);
 
   const fetchProducts = async (attempt = 1) => {
-    const url = `${apiUrl}/api/products`;
+    const url = `${apiUrl.replace(/\/$/, '')}/api/products/`;
     console.log(`[Menu] Fetching products from: ${url} (attempt ${attempt})`);
     try {
       setLoading(true);

@@ -22,6 +22,7 @@ const prisma = new PrismaClient({
 
 const app = Fastify({
   logger: true,
+  ignoreTrailingSlash: true,
 });
 
 // CORS configuration
@@ -119,9 +120,10 @@ const ensureOwnerExists = async (): Promise<void> => {
 
 // Auto-seed products if database is empty
 const autoSeedProducts = async (): Promise<void> => {
+  console.log('[AutoSeed] Checking database...');
   try {
     const productCount = await prisma.product.count();
-    console.log(`[AutoSeed] Current products in DB: ${productCount}`);
+    console.log(`[AutoSeed] Products in DB check: ${productCount}`);
     if (productCount === 0) {
       console.log('[AutoSeed] No products found, seeding...');
       const products = [
