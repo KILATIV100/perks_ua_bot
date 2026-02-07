@@ -14,6 +14,7 @@ export async function productRoutes(
           id: true,
           name: true,
           description: true,
+          volume: true,
           price: true,
           category: true,
           imageUrl: true,
