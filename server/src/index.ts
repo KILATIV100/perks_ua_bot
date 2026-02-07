@@ -241,6 +241,10 @@ const start = async (): Promise<void> => {
     // Auto-seed if DB is empty
     await autoSeedProducts();
 
+    // Log all registered routes for debugging
+    const routes = app.printRoutes();
+    console.log('[Routes] Registered routes:\n' + routes);
+
     const port = parseInt(process.env.PORT || '3000', 10);
     const host = '0.0.0.0';
 

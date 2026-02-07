@@ -48,13 +48,26 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
     fetchProducts();
   }, []);
 
-  const fetchProducts = async () => {
+  const [fetchError, setFetchError] = useState(false);
+
+  const fetchProducts = async (attempt = 1) => {
+    const url = `${apiUrl}/api/products`;
+    console.log(`[Menu] Fetching products from: ${url} (attempt ${attempt})`);
     try {
       setLoading(true);
-      const response = await axios.get<{ products: Product[] }>(`${apiUrl}/api/products`);
-      setProducts(response.data.products);
+      setFetchError(false);
+      const response = await axios.get<{ products: Product[] }>(url);
+      console.log(`[Menu] Got ${response.data.products?.length || 0} products`);
+      setProducts(response.data.products || []);
     } catch (err) {
-      console.error('[Menu] Failed to fetch products:', err);
+      console.error(`[Menu] Failed to fetch products (attempt ${attempt}):`, err);
+      // Retry once after 2s on failure (server may still be starting)
+      if (attempt < 2) {
+        console.log('[Menu] Retrying in 2s...');
+        await new Promise(r => setTimeout(r, 2000));
+        return fetchProducts(attempt + 1);
+      }
+      setFetchError(true);
     } finally {
       setLoading(false);
     }
@@ -227,7 +240,20 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
         })}
       </div>
 
-      {products.length === 0 && (
+      {fetchError && (
+        <div className="text-center py-8">
+          <p className="mb-3" style={{ color: '#ef4444' }}>Не вдалося завантажити меню</p>
+          <button
+            onClick={() => fetchProducts()}
+            className="py-2 px-6 rounded-xl text-sm font-medium"
+            style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+          >
+            Спробувати знову
+          </button>
+        </div>
+      )}
+
+      {!fetchError && products.length === 0 && (
         <div className="text-center py-12">
           <p style={{ color: theme.hintColor }}>Меню поки пусте</p>
         </div>

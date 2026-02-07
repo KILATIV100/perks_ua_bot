@@ -75,7 +75,7 @@ function useTelegramTheme(): TelegramTheme {
   }, []);
 }
 
-// Get Telegram user data (simple synchronous version - original working pattern)
+// Get Telegram user data with localStorage fallback for dev/testing
 function useTelegramUser(): TelegramUser | null {
   return useMemo(() => {
     console.log('[PerkUp] Getting Telegram user...');
@@ -83,18 +83,43 @@ function useTelegramUser(): TelegramUser | null {
     console.log('[PerkUp] WebApp.initDataUnsafe:', JSON.stringify(WebApp.initDataUnsafe));
 
     const user = WebApp.initDataUnsafe?.user;
-    if (!user) {
-      console.warn('[PerkUp] No user data from Telegram WebApp');
-      return null;
+    if (user) {
+      console.log('[PerkUp] Telegram user found:', user);
+      try { localStorage.setItem('perkup_user', JSON.stringify(user)); } catch { /* ignore */ }
+      return {
+        id: user.id,
+        firstName: user.first_name || 'Гість',
+        lastName: user.last_name,
+        username: user.username,
+      };
     }
 
-    console.log('[PerkUp] Telegram user found:', user);
-    return {
-      id: user.id,
-      firstName: user.first_name || 'Гість',
-      lastName: user.last_name,
-      username: user.username,
-    };
+    // Fallback: try localStorage (for dev mode or if initData is temporarily empty)
+    console.warn('[PerkUp] No user data from Telegram WebApp, trying localStorage...');
+    try {
+      const saved = localStorage.getItem('perkup_user');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        console.log('[PerkUp] Using localStorage fallback user:', parsed.id);
+        return {
+          id: parsed.id,
+          firstName: parsed.first_name || 'Гість',
+          lastName: parsed.last_name,
+          username: parsed.username,
+        };
+      }
+    } catch { /* ignore */ }
+
+    // Fallback: URL params for testing (?telegramId=12345)
+    const urlParams = new URLSearchParams(window.location.search);
+    const devId = urlParams.get('telegramId') || urlParams.get('user_id');
+    if (devId) {
+      console.log('[PerkUp] Using URL param fallback, telegramId:', devId);
+      return { id: Number(devId), firstName: 'Dev User' };
+    }
+
+    console.warn('[PerkUp] No user data available');
+    return null;
   }, []);
 }
 
