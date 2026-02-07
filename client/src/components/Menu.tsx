@@ -5,6 +5,7 @@ interface Product {
   id: string;
   name: string;
   description: string | null;
+  volume: string | null;
   price: string;
   category: string;
   imageUrl: string | null;
@@ -32,9 +33,10 @@ interface MenuProps {
 
 const CATEGORY_ICONS: Record<string, string> = {
   'Кава': '☕',
-  'Чай': '🍵',
   'Холодні напої': '🧊',
-  'Випічка': '🥐',
+  'Не кава': '🍵',
+  'Їжа': '🍔',
+  'Кава на продаж': '📦',
 };
 
 export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: MenuProps) {
@@ -58,10 +60,14 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
     }
   };
 
+  const CATEGORY_ORDER = ['Кава', 'Холодні напої', 'Не кава', 'Їжа', 'Кава на продаж'];
+
   const categories = useMemo(() => {
     const cats = new Set<string>();
     products.forEach(p => cats.add(p.category));
-    return Array.from(cats);
+    return CATEGORY_ORDER.filter(c => cats.has(c)).concat(
+      Array.from(cats).filter(c => !CATEGORY_ORDER.includes(c))
+    );
   }, [products]);
 
   // Set first category as active if none selected
@@ -166,6 +172,11 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
               <div className="flex-1 min-w-0">
                 <h3 className="font-semibold text-sm" style={{ color: theme.textColor }}>
                   {product.name}
+                  {product.volume && (
+                    <span className="font-normal ml-1" style={{ color: theme.hintColor }}>
+                      {product.volume}
+                    </span>
+                  )}
                 </h3>
                 {product.description && (
                   <p className="text-xs mt-0.5 truncate" style={{ color: theme.hintColor }}>
