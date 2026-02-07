@@ -21,6 +21,8 @@ export async function productRoutes(
         },
       });
 
+      app.log.info(`Fetched products count: ${products.length}`);
+
       // Group by category
       const categories = new Map<string, typeof products>();
       for (const product of products) {
