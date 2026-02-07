@@ -41,6 +41,29 @@ body {
   animation: confetti-fall 3s ease-out forwards;
 }
 
+/* Slide up animation for checkout */
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out forwards;
+}
+
+/* Hide scrollbar for category tabs */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 @layer components {
   .btn-primary {
     @apply bg-coffee text-white font-medium py-3 px-6 rounded-xl

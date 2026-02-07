@@ -5,6 +5,7 @@ import { locationRoutes } from './routes/locations.js';
 import { orderRoutes } from './routes/orders.js';
 import { userRoutes } from './routes/users.js';
 import { adminRoutes } from './routes/admin.js';
+import { productRoutes } from './routes/products.js';
 
 // Fix BigInt JSON serialization
 (BigInt.prototype as any).toJSON = function () {
@@ -84,6 +85,7 @@ app.get('/health', async (_request, reply) => {
 
 // Register routes
 app.register(locationRoutes, { prefix: '/api/locations' });
+app.register(productRoutes, { prefix: '/api/products' });
 app.register(orderRoutes, { prefix: '/api/orders' });
 app.register(userRoutes, { prefix: '/api/user' });
 app.register(adminRoutes, { prefix: '/api/admin' });

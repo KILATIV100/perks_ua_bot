@@ -2,10 +2,12 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import WebApp from '@twa-dev/sdk';
 import { WheelOfFortune } from './components/WheelOfFortune';
+import { Menu, CartItem } from './components/Menu';
+import { Checkout } from './components/Checkout';
 
 // Types
 type LocationStatus = 'active' | 'coming_soon';
-type TabType = 'locations' | 'bonuses';
+type TabType = 'locations' | 'menu' | 'bonuses';
 
 interface Location {
   id: string;
@@ -111,6 +113,10 @@ function App() {
   const [redeemCode, setRedeemCode] = useState<string | null>(null);
   const [isRedeeming, setIsRedeeming] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [showCheckout, setShowCheckout] = useState(false);
+
+  const cartItemCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart]);
 
   const theme = useTelegramTheme();
   const telegramUser = useTelegramUser();
@@ -219,9 +225,9 @@ function App() {
   }, []);
 
   const handleOrder = useCallback((location: Location) => {
-    const userName = telegramUser?.firstName || 'Гість';
-    WebApp.showAlert(`${userName}, ви обрали: ${location.name}\n\nЗамовлення буде доступне незабаром!`);
-  }, [telegramUser]);
+    setSelectedLocation(location);
+    setActiveTab('menu');
+  }, []);
 
   const handleSpin = async (userLat?: number, userLng?: number): Promise<{ reward: number; newBalance: number } | { error: string; message: string } | null> => {
     if (!telegramUser) return null;
@@ -372,31 +378,65 @@ function App() {
 
           {/* Tabs */}
           <div className="flex gap-2 mt-4">
-            <button
-              onClick={() => setActiveTab('locations')}
-              className="flex-1 py-2 px-4 rounded-xl font-medium transition-all"
-              style={{
-                backgroundColor: activeTab === 'locations' ? theme.buttonColor : theme.secondaryBgColor,
-                color: activeTab === 'locations' ? theme.buttonTextColor : theme.textColor,
-              }}>
-              Локації
-            </button>
-            <button
-              onClick={() => setActiveTab('bonuses')}
-              className="flex-1 py-2 px-4 rounded-xl font-medium transition-all"
-              style={{
-                backgroundColor: activeTab === 'bonuses' ? theme.buttonColor : theme.secondaryBgColor,
-                color: activeTab === 'bonuses' ? theme.buttonTextColor : theme.textColor,
-              }}>
-              Бонуси
-            </button>
+            {(['locations', 'menu', 'bonuses'] as TabType[]).map(tab => {
+              const labels: Record<TabType, string> = { locations: 'Локації', menu: 'Меню', bonuses: 'Бонуси' };
+              return (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className="flex-1 py-2 px-4 rounded-xl font-medium transition-all"
+                  style={{
+                    backgroundColor: activeTab === tab ? theme.buttonColor : theme.secondaryBgColor,
+                    color: activeTab === tab ? theme.buttonTextColor : theme.textColor,
+                  }}>
+                  {labels[tab]}
+                </button>
+              );
+            })}
           </div>
         </div>
       </header>
 
       {/* Main content */}
       <main className="p-4 pb-24">
-        {activeTab === 'locations' ? (
+        {activeTab === 'menu' ? (
+          /* Menu Tab */
+          <div>
+            {selectedLocation ? (
+              <>
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold" style={{ color: theme.textColor }}>Меню</h2>
+                    <p className="text-xs" style={{ color: theme.hintColor }}>📍 {selectedLocation.name}</p>
+                  </div>
+                  <button
+                    onClick={() => { setSelectedLocation(null); setActiveTab('locations'); }}
+                    className="text-xs px-3 py-1.5 rounded-lg"
+                    style={{ backgroundColor: theme.hintColor + '20', color: theme.hintColor }}
+                  >
+                    Змінити
+                  </button>
+                </div>
+                <Menu apiUrl={API_URL} cart={cart} onCartChange={setCart} theme={theme} />
+              </>
+            ) : (
+              <div className="text-center py-12">
+                <p className="text-4xl mb-4">📍</p>
+                <p className="font-medium mb-2" style={{ color: theme.textColor }}>Оберіть локацію</p>
+                <p className="text-sm mb-4" style={{ color: theme.hintColor }}>
+                  Спочатку оберіть кав'ярню, щоб побачити меню
+                </p>
+                <button
+                  onClick={() => setActiveTab('locations')}
+                  className="py-2.5 px-6 rounded-xl text-sm font-medium transition-all active:scale-95"
+                  style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+                >
+                  Обрати локацію
+                </button>
+              </div>
+            )}
+          </div>
+        ) : activeTab === 'locations' ? (
           <>
             <div className="mb-6">
               <h2 className="text-lg font-semibold mb-1" style={{ color: theme.textColor }}>Оберіть локацію</h2>
@@ -568,6 +608,43 @@ function App() {
           </div>
         )}
       </main>
+
+      {/* Floating Cart Button */}
+      {activeTab === 'menu' && cartItemCount > 0 && selectedLocation && (
+        <div className="fixed bottom-6 left-4 right-4 z-30">
+          <button
+            onClick={() => setShowCheckout(true)}
+            className="w-full py-4 rounded-2xl font-bold text-base flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
+            style={{
+              backgroundColor: theme.buttonColor,
+              color: theme.buttonTextColor,
+              boxShadow: '0 4px 20px rgba(0,0,0,0.25)',
+            }}
+          >
+            <span>🛒 Кошик ({cartItemCount})</span>
+            <span>·</span>
+            <span>{cart.reduce((s, i) => s + parseFloat(i.product.price) * i.quantity, 0)} грн</span>
+          </button>
+        </div>
+      )}
+
+      {/* Checkout Modal */}
+      {showCheckout && selectedLocation && telegramUser && (
+        <Checkout
+          apiUrl={API_URL}
+          cart={cart}
+          telegramId={telegramUser.id}
+          locationId={selectedLocation.id}
+          locationName={selectedLocation.name}
+          theme={theme}
+          onClose={() => setShowCheckout(false)}
+          onSuccess={() => {
+            setShowCheckout(false);
+            setCart([]);
+            WebApp.showAlert('Замовлення прийнято! Очікуйте повідомлення від бариста.');
+          }}
+        />
+      )}
 
       {/* Terms Modal */}
       {showTerms && (

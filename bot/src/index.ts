@@ -940,6 +940,51 @@ bot.on('edited_message:location', async (ctx) => {
   await handleLocation(ctx, latitude, longitude, true);
 });
 
+// Handle callback queries (inline button presses)
+bot.on('callback_query:data', async (ctx) => {
+  const data = ctx.callbackQuery.data;
+  const userId = ctx.from?.id;
+
+  if (!userId) {
+    await ctx.answerCallbackQuery({ text: 'Помилка' });
+    return;
+  }
+
+  // Handle "Accept order" button
+  if (data.startsWith('order_accept:')) {
+    const orderId = data.replace('order_accept:', '');
+
+    try {
+      const response = await fetch(`${API_URL}/api/orders/${orderId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminTelegramId: String(userId),
+          status: 'PREPARING',
+        }),
+      });
+
+      if (response.ok) {
+        await ctx.answerCallbackQuery({ text: '✅ Замовлення прийнято!' });
+        const adminName = ctx.from?.first_name || `Admin ${userId}`;
+        await ctx.editMessageText(
+          ctx.callbackQuery.message?.text + `\n\n✅ *Прийнято в роботу* — ${adminName}`,
+          { parse_mode: 'Markdown' }
+        );
+      } else {
+        const err = (await response.json()) as { error?: string };
+        await ctx.answerCallbackQuery({ text: `❌ ${err.error || 'Помилка'}` });
+      }
+    } catch (error) {
+      console.error('[Order Accept] Error:', error);
+      await ctx.answerCallbackQuery({ text: '❌ Помилка з\'єднання' });
+    }
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+});
+
 // Error handling
 bot.catch((err) => {
   console.error('Bot error:', err);
