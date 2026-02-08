@@ -328,7 +328,7 @@ export async function userRoutes(
 
         return reply.status(429).send({
           error: 'Cooldown',
-          message: `Наступне обертання доступне через ${remainingHours} год.`,
+          message: 'Бро, ти вже сьогодні випробував удачу. Приходь завтра за новими бонусами!',
           remainingMs,
           nextSpinAt: nextMidnight.toISOString(),
         });

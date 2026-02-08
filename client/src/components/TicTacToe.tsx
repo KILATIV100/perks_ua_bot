@@ -41,6 +41,25 @@ const emptyBoard: Board = [
   [null, null, null],
 ];
 
+const cellAnimationStyle = `
+@keyframes cellAppear {
+  0% { transform: scale(0) rotate(-180deg); opacity: 0; }
+  60% { transform: scale(1.2) rotate(10deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+@keyframes cellPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+@keyframes winGlow {
+  0%, 100% { box-shadow: 0 0 5px rgba(255,215,0,0.3); }
+  50% { box-shadow: 0 0 20px rgba(255,215,0,0.8); }
+}
+.cell-appear { animation: cellAppear 0.4s ease-out forwards; }
+.cell-my-turn { animation: cellPulse 1.5s ease-in-out infinite; }
+.cell-win { animation: winGlow 1s ease-in-out infinite; }
+`;
+
 export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUsername, gameIdFromUrl, theme }: TicTacToeProps) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [game, setGame] = useState<GameState | null>(null);
@@ -282,6 +301,7 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
 
   return (
     <div className="text-center">
+      <style>{cellAnimationStyle}</style>
       <div className="flex justify-between items-center mb-4">
         <div className="text-sm" style={{ color: theme.textColor }}>
           <span className="font-bold">{game.player1Name || 'Гравець 1'}</span>
@@ -306,7 +326,7 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
               key={`${ri}-${ci}`}
               onClick={() => makeMove(ri, ci)}
               disabled={!!cell || !game.isMyTurn || game.status !== 'playing'}
-              className="w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
+              className={`w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default ${cell ? 'cell-appear' : ''} ${!cell && game.isMyTurn && game.status === 'playing' ? 'cell-my-turn' : ''} ${game.status === 'finished' && game.winnerId === game.playerId ? 'cell-win' : ''}`}
               style={{
                 backgroundColor: cell ? (cell === 'X' ? '#EF444415' : '#3B82F615') : theme.bgColor,
                 color: cell === 'X' ? '#EF4444' : cell === 'O' ? '#3B82F6' : theme.hintColor,

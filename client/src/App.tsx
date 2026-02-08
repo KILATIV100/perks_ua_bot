@@ -696,7 +696,7 @@ function App() {
               <h2 className="text-lg font-semibold mb-1" style={{ color: theme.textColor }}>Колесо Фортуни</h2>
               <p className="text-sm" style={{ color: theme.hintColor }}>Крутіть колесо та отримуйте бали!</p>
             </div>
-            <WheelOfFortune onSpin={handleSpin} canSpin={canSpin} nextSpinAt={nextSpinAt} theme={theme} />
+            <WheelOfFortune onSpin={handleSpin} canSpin={canSpin} theme={theme} />
 
             {/* Terms Link */}
             <div className="mt-8 text-center">
