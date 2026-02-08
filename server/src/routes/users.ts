@@ -40,44 +40,19 @@ async function notifyOwnerNewUser(firstName: string | undefined, telegramId: str
 }
 
 /**
- * Get today's date string in Kyiv timezone (YYYY-MM-DD) and the Date object for midnight Kyiv
+ * Get today's date string in server timezone (YYYY-MM-DD)
  */
-function getKyivMidnight(): Date {
-  const now = new Date();
-  // Get Kyiv date string
-  const kyivDateStr = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' }); // YYYY-MM-DD format
-  // Parse as midnight Kyiv time
-  // Create a date at 00:00:00 in Kyiv timezone
-  const kyivMidnight = new Date(kyivDateStr + 'T00:00:00+02:00');
-  // Adjust for DST: Kyiv is UTC+2 in winter, UTC+3 in summer
-  // Use Intl to get the correct offset
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Europe/Kyiv',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-  const parts = formatter.formatToParts(now);
-  const kyivHour = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
-  const kyivMinute = parseInt(parts.find(p => p.type === 'minute')?.value || '0');
-  const kyivSecond = parseInt(parts.find(p => p.type === 'second')?.value || '0');
-
-  // Calculate midnight Kyiv as UTC timestamp
-  const nowUtc = now.getTime();
-  const elapsedSinceKyivMidnight = (kyivHour * 3600 + kyivMinute * 60 + kyivSecond) * 1000;
-  return new Date(nowUtc - elapsedSinceKyivMidnight);
+function getServerDateString(date = new Date()): string {
+  return date.toLocaleDateString('en-CA');
 }
 
 /**
- * Get the next midnight in Kyiv timezone
+ * Get the next midnight in server timezone
  */
-function getNextKyivMidnight(): Date {
-  const currentMidnight = getKyivMidnight();
-  return new Date(currentMidnight.getTime() + 24 * 60 * 60 * 1000);
+function getNextServerMidnight(): Date {
+  const next = new Date();
+  next.setHours(24, 0, 0, 0);
+  return next;
 }
 
 // Validation schemas - telegramId can be number or string
@@ -176,9 +151,8 @@ export async function userRoutes(
           username: body.username,
           firstName: body.firstName,
           points: validReferrerId ? 5 : 0,
-          referralPoints: validReferrerId ? 5 : 0,
           totalSpins: 0,
-          referredBy: validReferrerId,
+          referredById: validReferrerId,
         },
         select: {
           id: true,
@@ -188,9 +162,10 @@ export async function userRoutes(
           points: true,
           totalSpins: true,
           lastSpin: true,
+          lastSpinDate: true,
           role: true,
           createdAt: true,
-          referredBy: true,
+          referredById: true,
         },
       });
 
@@ -315,16 +290,16 @@ export async function userRoutes(
         }
       }
 
-      // Check cooldown: reset at 00:00 Kyiv time
+      // Check cooldown: reset at server midnight
       const now = new Date();
-      const todayKyivMidnight = getKyivMidnight();
 
-      if (user.lastSpinDate && user.lastSpinDate >= todayKyivMidnight) {
-        const nextMidnight = getNextKyivMidnight();
+      const todayString = getServerDateString(now);
+      if (user.lastSpinDate && user.lastSpinDate === todayString) {
+        const nextMidnight = getNextServerMidnight();
         const remainingMs = nextMidnight.getTime() - now.getTime();
         const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
 
-        app.log.info(`[Spin Cooldown] telegramId: ${body.telegramId}, remaining: ${remainingHours}h (resets at Kyiv midnight)`);
+        app.log.info(`[Spin Cooldown] telegramId: ${body.telegramId}, remaining: ${remainingHours}h (resets at server midnight)`);
 
         return reply.status(429).send({
           error: 'Cooldown',
@@ -344,7 +319,7 @@ export async function userRoutes(
           points: { increment: reward },
           totalSpins: { increment: 1 },
           lastSpin: now,
-          lastSpinDate: now,
+          lastSpinDate: todayString,
         },
         select: {
           id: true,
@@ -359,23 +334,22 @@ export async function userRoutes(
       app.log.info(`[Spin Success] telegramId: ${body.telegramId}, reward: ${reward}, total: ${updatedUser.points}, spins: ${updatedUser.totalSpins}`);
 
       // Referral bonus: first spin by a referred user → +10 to referrer only
-      if (user.referredBy && user.totalSpins === 0) {
+      if (user.referredById && user.totalSpins === 0) {
         try {
           await app.prisma.user.update({
-            where: { telegramId: user.referredBy },
+            where: { telegramId: user.referredById },
             data: {
               points: { increment: 10 },
-              referralPoints: { increment: 10 },
             },
           });
 
-          app.log.info(`[Referral Bonus] +10 to referrer ${user.referredBy} (triggered by first spin of ${body.telegramId})`);
+          app.log.info(`[Referral Bonus] +10 to referrer ${user.referredById} (triggered by first spin of ${body.telegramId})`);
 
           // Notify referrer about the bonus
           const spinnerName = updatedUser.firstName || 'Твій друг';
           const referralBonusMsg = `🎁 *+10 балів за реферала!*\n\n` +
             `${spinnerName} щойно крутнув колесо вперше — ти отримав бонус за запрошення!`;
-          sendTelegramMessage(Number(user.referredBy), referralBonusMsg).catch((err) => {
+          sendTelegramMessage(Number(user.referredById), referralBonusMsg).catch((err) => {
             app.log.error({ err }, 'Failed to send referral bonus notification');
           });
         } catch (refError) {
@@ -392,8 +366,8 @@ export async function userRoutes(
         app.log.error({ err }, 'Failed to send spin notification');
       });
 
-      // Calculate next spin time (next Kyiv midnight)
-      const nextMidnight = getNextKyivMidnight();
+      // Calculate next spin time (next server midnight)
+      const nextMidnight = getNextServerMidnight();
 
       return reply.send({
         success: true,
