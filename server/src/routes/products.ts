@@ -31,11 +31,17 @@ export async function productRoutes(
       }
 
       return reply.send({
-        products: products.map(p => ({ ...p, price: p.price.toString() })),
+        products: products.map((p: (typeof products)[number]) => ({
+          ...p,
+          price: p.price.toString(),
+        })),
         categories: Object.fromEntries(
           Array.from(categories.entries()).map(([cat, prods]) => [
             cat,
-            prods.map(p => ({ ...p, price: p.price.toString() })),
+            prods.map((p: (typeof products)[number]) => ({
+              ...p,
+              price: p.price.toString(),
+            })),
           ])
         ),
       });
