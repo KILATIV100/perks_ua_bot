@@ -7,6 +7,8 @@ import { orderRoutes } from './routes/orders.js';
 import { userRoutes } from './routes/users.js';
 import { adminRoutes } from './routes/admin.js';
 import { productRoutes } from './routes/products.js';
+import { gameRoutes, setupGameSockets } from './routes/games.js';
+import { seedProducts } from './data/seedData.js';
 
 // Fix BigInt JSON serialization
 (BigInt.prototype as any).toJSON = function () {
@@ -46,6 +48,7 @@ app.register(productRoutes, { prefix: '/api/products' });
 app.register(orderRoutes, { prefix: '/api/orders' });
 app.register(userRoutes, { prefix: '/api/user' });
 app.register(adminRoutes, { prefix: '/api/admin' });
+app.register(gameRoutes, { prefix: '/api/games' });
 
 // Ensure Owner exists
 const ensureOwnerExists = async () => {
@@ -64,8 +67,8 @@ const ensureOwnerExists = async () => {
 const autoSeedProducts = async () => {
   const count = await prisma.product.count();
   if (count === 0) {
-    // Тут логіка сіда з твого prisma/seed.ts
     console.log('[AutoSeed] Seeding products...');
+    await prisma.product.createMany({ data: seedProducts });
   }
 };
 
@@ -73,6 +76,10 @@ const start = async () => {
   try {
     await ensureOwnerExists();
     await autoSeedProducts();
+    await app.ready();
+    if (app.io) {
+      setupGameSockets(app.io, prisma);
+    }
     await app.listen({ port: Number(process.env.PORT) || 3000, host: '0.0.0.0' });
   } catch (err) {
     app.log.error(err);
