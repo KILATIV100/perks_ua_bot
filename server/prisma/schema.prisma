@@ -18,6 +18,12 @@ enum UserRole {
   OWNER
 }
 
+enum ProductType {
+  MENU
+  MERCH
+  BEANS
+}
+
 model Location {
   id          String         @id @default(uuid())
   name        String
@@ -34,41 +40,24 @@ model Location {
 }
 
 model User {
-  id                String           @id @default(uuid())
-  telegramId        String           @unique
-  username          String?
-  firstName         String?
-  lastName          String?
-  points            Int              @default(0)
-  totalSpins        Int              @default(0)
-  role              UserRole         @default(USER)
-  lastSpin          DateTime?
-  lastSpinDate      DateTime?        // date-only field for midnight Kyiv reset
-  referredBy        String?          // telegramId of the user who referred this one
-  referralPoints    Int              @default(0)      // total referral bonus points earned
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
-  orders            Order[]
-  redemptionCodes   RedemptionCode[]
-  gamesAsPlayer1    GameSession[]    @relation("GamePlayer1")
-  gamesAsPlayer2    GameSession[]    @relation("GamePlayer2")
+  id               String   @id @default(uuid())
+  telegramId       String   @unique
+  username         String?
+  firstName        String?
+  lastName         String?
+  points           Int      @default(0)
+  totalSpins       Int      @default(0)
+  lastSpin         DateTime?
+  lastSpinDate     String?  // Для скидання о 00:00 (YYYY-MM-DD)
+  role             UserRole @default(USER)
+  referredById     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  orders           Order[]
+  sessionsAsPlayer1 GameSession[] @relation("Player1")
+  sessionsAsPlayer2 GameSession[] @relation("Player2")
 
   @@map("users")
-}
-
-model RedemptionCode {
-  id        String   @id @default(uuid())
-  code      String   @unique
-  userId    String
-  used      Boolean  @default(false)
-  usedAt    DateTime?
-  usedBy    String?  // Admin telegramId who verified the code
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id])
-
-  @@map("redemption_codes")
 }
 
 model Product {
@@ -88,76 +77,45 @@ model Product {
   @@map("products")
 }
 
-model Order {
-  id            String      @id @default(uuid())
-  userId        String
-  locationId    String
-  status        OrderStatus @default(PENDING)
-  totalPrice    Decimal     @db.Decimal(10, 2)
-  paymentMethod String      @default("cash")
-  pickupMinutes Int         @default(10)
-  items         OrderItem[]
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+model GameSession {
+  id         String   @id @default(uuid())
+  type       String   @default("TIC_TAC_TOE")
+  player1Id  String
+  player2Id  String?
+  player1    User     @relation("Player1", fields: [player1Id], references: [id])
+  player2    User?    @relation("Player2", fields: [player2Id], references: [id])
+  boardState Json?
+  status     String   @default("WAITING") // WAITING, PLAYING, FINISHED
+  winnerId   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  user     User     @relation(fields: [userId], references: [id])
-  location Location @relation(fields: [locationId], references: [id])
+  @@map("game_sessions")
+}
+
+model Order {
+  id         String      @id @default(uuid())
+  userId     String
+  user       User        @relation(fields: [userId], references: [id])
+  locationId String
+  location   Location    @relation(fields: [locationId], references: [id])
+  status     String      @default("PENDING")
+  total      Decimal     @db.Decimal(10, 2)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  items      OrderItem[]
 
   @@map("orders")
 }
 
 model OrderItem {
-  id        String   @id @default(uuid())
+  id        String  @id @default(uuid())
   orderId   String
-  productId String?
-  name      String
+  order     Order   @relation(fields: [orderId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
   quantity  Int
-  price     Decimal  @db.Decimal(10, 2)
-
-  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product Product? @relation(fields: [productId], references: [id])
+  price     Decimal @db.Decimal(10, 2)
 
   @@map("order_items")
-}
-
-enum OrderStatus {
-  PENDING
-  CONFIRMED
-  PREPARING
-  READY
-  COMPLETED
-  CANCELLED
-}
-
-enum ProductType {
-  MENU
-  MERCH
-  COFFEE_BEANS
-}
-
-enum GameType {
-  TIC_TAC_TOE
-}
-
-enum GameStatus {
-  WAITING
-  PLAYING
-  FINISHED
-}
-
-model GameSession {
-  id         String     @id @default(uuid())
-  player1Id  String
-  player2Id  String?
-  gameType   GameType   @default(TIC_TAC_TOE)
-  boardState Json       @default("[[null,null,null],[null,null,null],[null,null,null]]")
-  status     GameStatus @default(WAITING)
-  winnerId   String?
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
-
-  player1 User  @relation("GamePlayer1", fields: [player1Id], references: [id])
-  player2 User? @relation("GamePlayer2", fields: [player2Id], references: [id])
-
-  @@map("game_sessions")
 }
