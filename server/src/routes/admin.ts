@@ -359,8 +359,8 @@ export async function adminRoutes(
       return reply.send({
         exportedAt: new Date().toISOString(),
         totalUsers: users.length,
-        totalPoints: users.reduce((sum, u) => sum + u.points, 0),
-        totalSpins: users.reduce((sum, u) => sum + u.totalSpins, 0),
+        totalPoints: users.reduce((sum: number, u) => sum + u.points, 0),
+        totalSpins: users.reduce((sum: number, u) => sum + u.totalSpins, 0),
         users,
       });
     } catch (error) {
