@@ -51,6 +51,7 @@ model User {
   lastSpinDate     String?  // Для скидання о 00:00 (YYYY-MM-DD)
   role             UserRole @default(USER)
   referredById     String?
+  redemptionCodes  RedemptionCode[]
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   orders           Order[]
@@ -93,6 +94,20 @@ model GameSession {
   @@map("game_sessions")
 }
 
+model RedemptionCode {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  usedAt    DateTime?
+  usedBy    String?
+
+  @@map("redemption_codes")
+}
+
 model Order {
   id         String      @id @default(uuid())
   userId     String
@@ -100,7 +115,12 @@ model Order {
   locationId String
   location   Location    @relation(fields: [locationId], references: [id])
   status     String      @default("PENDING")
-  total      Decimal     @db.Decimal(10, 2)
+  totalPrice Decimal     @db.Decimal(10, 2)
+  paymentMethod String   @default("cash")
+  pickupMinutes Int      @default(10)
+  deliveryType String    @default("pickup")
+  shippingAddr String?
+  phone        String?
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
   items      OrderItem[]
@@ -114,6 +134,7 @@ model OrderItem {
   order     Order   @relation(fields: [orderId], references: [id])
   productId String
   product   Product @relation(fields: [productId], references: [id])
+  name      String
   quantity  Int
   price     Decimal @db.Decimal(10, 2)
 
