@@ -34,14 +34,14 @@ export async function gameRoutes(
       const game = await app.prisma.gameSession.create({
         data: {
           player1Id: user.id,
-          gameType: 'TIC_TAC_TOE',
+          type: 'TIC_TAC_TOE',
           boardState: [[null, null, null], [null, null, null], [null, null, null]],
           status: 'WAITING',
         },
         select: {
           id: true,
           status: true,
-          gameType: true,
+          type: true,
           createdAt: true,
         },
       });
@@ -102,7 +102,7 @@ export async function gameRoutes(
           player2Id: true,
           status: true,
           boardState: true,
-          gameType: true,
+          type: true,
         },
       });
 
@@ -187,7 +187,7 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
     });
 
     // Handle a move
-    socket.on('game:move', async (data: { gameId: string; playerId: string; row: number; col: number }) => {
+    const handleMove = async (data: { gameId: string; playerId: string; row: number; col: number }) => {
       try {
         const game = await prisma.gameSession.findUnique({
           where: { id: data.gameId },
@@ -297,11 +297,23 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
           player1: updatedGame.player1,
           player2: updatedGame.player2,
         });
+
+        if (status === 'FINISHED') {
+          io.to(`game:${data.gameId}`).emit('game_over', {
+            board,
+            winnerId,
+            player1: updatedGame.player1,
+            player2: updatedGame.player2,
+          });
+        }
       } catch (error) {
         console.error('[Socket.IO] Move error:', error);
         socket.emit('game:error', { message: 'Server error processing move' });
       }
-    });
+    };
+
+    socket.on('game:move', handleMove);
+    socket.on('make_move', handleMove);
 
     socket.on('disconnect', () => {
       console.log(`[Socket.IO] Client disconnected: ${socket.id}`);
