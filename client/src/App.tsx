@@ -126,7 +126,6 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [appUser, setAppUser] = useState<AppUser | null>(null);
   const [canSpin, setCanSpin] = useState(true);
-  const [nextSpinAt, setNextSpinAt] = useState<string | null>(null);
   const [showTerms, setShowTerms] = useState(false);
   const [redeemCode, setRedeemCode] = useState<string | null>(null);
   const [isRedeeming, setIsRedeeming] = useState(false);
@@ -205,18 +204,17 @@ function App() {
 
       setAppUser(user);
 
-      // Check if can spin (server now uses Kyiv midnight reset)
+      // Check if can spin (Kyiv midnight reset)
       if (user.lastSpin) {
         const lastSpin = new Date(user.lastSpin);
-        const nextSpin = new Date(lastSpin.getTime() + 24 * 60 * 60 * 1000);
-        const now = new Date();
+        // Get today's date in Kyiv timezone
+        const kyivToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' });
+        const spinDay = lastSpin.toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' });
 
-        if (now < nextSpin) {
+        if (spinDay === kyivToday) {
           setCanSpin(false);
-          setNextSpinAt(nextSpin.toISOString());
         } else {
           setCanSpin(true);
-          setNextSpinAt(null);
         }
       }
 
@@ -258,7 +256,7 @@ function App() {
     const devMode = urlParams.get('dev') === 'true' || urlParams.get('admin') === 'true';
 
     try {
-      const response = await api.post<{ reward: number; newBalance: number; nextSpinAt: string }>('/api/user/spin', {
+      const response = await api.post<{ reward: number; newBalance: number }>('/api/user/spin', {
         telegramId: String(telegramUser.id),
         userLat,
         userLng,
@@ -267,7 +265,6 @@ function App() {
 
       setAppUser(prev => prev ? { ...prev, points: response.data.newBalance } : null);
       setCanSpin(false);
-      setNextSpinAt(response.data.nextSpinAt);
 
       return { reward: response.data.reward, newBalance: response.data.newBalance };
     } catch (err) {
@@ -275,7 +272,6 @@ function App() {
       if (axios.isAxiosError(err)) {
         if (err.response?.status === 429) {
           setCanSpin(false);
-          setNextSpinAt(err.response.data.nextSpinAt);
         }
         if (err.response?.status === 403) {
           // Too far from location
@@ -759,9 +755,8 @@ function App() {
             <div className="space-y-3 text-sm" style={{ color: theme.textColor }}>
               <p>1. Акція діє в усіх кав'ярнях PerkUp.</p>
               <p>2. 100 накопичених балів можна обміняти на один будь-який напій вартістю до 100 грн.</p>
-              <p>3. Якщо вартість напою перевищує 100 грн, користувач може доплатити різницю.</p>
-              <p>4. Код на отримання напою дійсний протягом 15 хвилин після активації.</p>
-              <p>5. Бали не підлягають обміну на грошовий еквівалент.</p>
+              <p>3. Код на отримання напою дійсний протягом 15 хвилин після активації.</p>
+              <p>4. Бали не підлягають обміну на грошовий еквівалент.</p>
             </div>
             <button
               onClick={() => setShowTerms(false)}
