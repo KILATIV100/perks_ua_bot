@@ -43,12 +43,15 @@ model User {
   totalSpins        Int              @default(0)
   role              UserRole         @default(USER)
   lastSpin          DateTime?
+  lastSpinDate      DateTime?        // date-only field for midnight Kyiv reset
   referredBy        String?          // telegramId of the user who referred this one
   referralPoints    Int              @default(0)      // total referral bonus points earned
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
   orders            Order[]
   redemptionCodes   RedemptionCode[]
+  gamesAsPlayer1    GameSession[]    @relation("GamePlayer1")
+  gamesAsPlayer2    GameSession[]    @relation("GamePlayer2")
 
   @@map("users")
 }
@@ -75,6 +78,7 @@ model Product {
   volume      String?
   price       Decimal     @db.Decimal(10, 2)
   category    String
+  type        ProductType @default(MENU)
   imageUrl    String?
   isActive    Boolean     @default(true)
   createdAt   DateTime    @default(now())
@@ -123,4 +127,37 @@ enum OrderStatus {
   READY
   COMPLETED
   CANCELLED
+}
+
+enum ProductType {
+  MENU
+  MERCH
+  COFFEE_BEANS
+}
+
+enum GameType {
+  TIC_TAC_TOE
+}
+
+enum GameStatus {
+  WAITING
+  PLAYING
+  FINISHED
+}
+
+model GameSession {
+  id         String     @id @default(uuid())
+  player1Id  String
+  player2Id  String?
+  gameType   GameType   @default(TIC_TAC_TOE)
+  boardState Json       @default("[[null,null,null],[null,null,null],[null,null,null]]")
+  status     GameStatus @default(WAITING)
+  winnerId   String?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  player1 User  @relation("GamePlayer1", fields: [player1Id], references: [id])
+  player2 User? @relation("GamePlayer2", fields: [player2Id], references: [id])
+
+  @@map("game_sessions")
 }
