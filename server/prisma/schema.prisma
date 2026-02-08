@@ -101,6 +101,9 @@ model RedemptionCode {
   user      User     @relation(fields: [userId], references: [id])
   createdAt DateTime @default(now())
   expiresAt DateTime
+  used      Boolean  @default(false)
+  usedAt    DateTime?
+  usedBy    String?
 
   @@map("redemption_codes")
 }
@@ -112,7 +115,9 @@ model Order {
   locationId String
   location   Location    @relation(fields: [locationId], references: [id])
   status     String      @default("PENDING")
-  total      Decimal     @db.Decimal(10, 2)
+  totalPrice Decimal     @db.Decimal(10, 2)
+  paymentMethod String   @default("cash")
+  pickupMinutes Int      @default(10)
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
   items      OrderItem[]
@@ -126,6 +131,7 @@ model OrderItem {
   order     Order   @relation(fields: [orderId], references: [id])
   productId String
   product   Product @relation(fields: [productId], references: [id])
+  name      String
   quantity  Int
   price     Decimal @db.Decimal(10, 2)
 
