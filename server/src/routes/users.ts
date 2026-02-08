@@ -39,45 +39,52 @@ async function notifyOwnerNewUser(firstName: string | undefined, telegramId: str
   sendTelegramMessage(OWNER_TELEGRAM_ID, message).catch(() => {});
 }
 
-/**
- * Get today's date string in Kyiv timezone (YYYY-MM-DD) and the Date object for midnight Kyiv
- */
-function getKyivMidnight(): Date {
-  const now = new Date();
-  // Get Kyiv date string
-  const kyivDateStr = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' }); // YYYY-MM-DD format
-  // Parse as midnight Kyiv time
-  // Create a date at 00:00:00 in Kyiv timezone
-  const kyivMidnight = new Date(kyivDateStr + 'T00:00:00+02:00');
-  // Adjust for DST: Kyiv is UTC+2 in winter, UTC+3 in summer
-  // Use Intl to get the correct offset
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Europe/Kyiv',
+const KYIV_TIME_ZONE = 'Europe/Kyiv';
+
+function getKyivDateParts(date = new Date()): { year: number; month: number; day: number } {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: KYIV_TIME_ZONE,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
   });
-  const parts = formatter.formatToParts(now);
-  const kyivHour = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
-  const kyivMinute = parseInt(parts.find(p => p.type === 'minute')?.value || '0');
-  const kyivSecond = parseInt(parts.find(p => p.type === 'second')?.value || '0');
+  const parts = formatter.formatToParts(date);
+  const year = Number(parts.find(part => part.type === 'year')?.value);
+  const month = Number(parts.find(part => part.type === 'month')?.value);
+  const day = Number(parts.find(part => part.type === 'day')?.value);
+  return { year, month, day };
+}
 
-  // Calculate midnight Kyiv as UTC timestamp
-  const nowUtc = now.getTime();
-  const elapsedSinceKyivMidnight = (kyivHour * 3600 + kyivMinute * 60 + kyivSecond) * 1000;
-  return new Date(nowUtc - elapsedSinceKyivMidnight);
+function getKyivOffsetMinutes(date = new Date()): number {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: KYIV_TIME_ZONE,
+    timeZoneName: 'shortOffset',
+    hour: '2-digit',
+  });
+  const offsetValue = formatter.formatToParts(date).find(part => part.type === 'timeZoneName')?.value || 'GMT+0';
+  const match = offsetValue.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
+  if (!match) return 0;
+  const hours = Number(match[1]);
+  const minutes = match[2] ? Number(match[2]) : 0;
+  return hours * 60 + Math.sign(hours) * minutes;
+}
+
+/**
+ * Get today's date string in Kyiv timezone (YYYY-MM-DD)
+ */
+function getKyivDateString(date = new Date()): string {
+  return date.toLocaleDateString('en-CA', { timeZone: KYIV_TIME_ZONE });
 }
 
 /**
  * Get the next midnight in Kyiv timezone
  */
 function getNextKyivMidnight(): Date {
-  const currentMidnight = getKyivMidnight();
-  return new Date(currentMidnight.getTime() + 24 * 60 * 60 * 1000);
+  const { year, month, day } = getKyivDateParts(new Date());
+  const nextDay = new Date(Date.UTC(year, month - 1, day + 1, 12, 0, 0));
+  const offsetMinutes = getKyivOffsetMinutes(nextDay);
+  const utcMillis = Date.UTC(year, month - 1, day + 1, 0, 0, 0) - offsetMinutes * 60 * 1000;
+  return new Date(utcMillis);
 }
 
 // Validation schemas - telegramId can be number or string
@@ -164,21 +171,24 @@ export async function userRoutes(
         }
       }
 
+      const isOwner = String(body.telegramId) === OWNER_TELEGRAM_ID;
+
       // Create or update user; if new + referred, give +5 bonus immediately
       const user = await app.prisma.user.upsert({
         where: { telegramId: body.telegramId },
         update: {
           username: body.username,
           firstName: body.firstName,
+          ...(isOwner ? { role: 'OWNER' } : {}),
         },
         create: {
           telegramId: body.telegramId,
           username: body.username,
           firstName: body.firstName,
           points: validReferrerId ? 5 : 0,
-          referralPoints: validReferrerId ? 5 : 0,
           totalSpins: 0,
-          referredBy: validReferrerId,
+          referredById: validReferrerId,
+          role: isOwner ? 'OWNER' : 'USER',
         },
         select: {
           id: true,
@@ -188,9 +198,10 @@ export async function userRoutes(
           points: true,
           totalSpins: true,
           lastSpin: true,
+          lastSpinDate: true,
           role: true,
           createdAt: true,
-          referredBy: true,
+          referredById: true,
         },
       });
 
@@ -315,11 +326,11 @@ export async function userRoutes(
         }
       }
 
-      // Check cooldown: reset at 00:00 Kyiv time
+      // Check cooldown: reset at server midnight
       const now = new Date();
-      const todayKyivMidnight = getKyivMidnight();
 
-      if (user.lastSpinDate && user.lastSpinDate >= todayKyivMidnight) {
+      const todayString = getKyivDateString(now);
+      if (user.lastSpinDate && user.lastSpinDate === todayString) {
         const nextMidnight = getNextKyivMidnight();
         const remainingMs = nextMidnight.getTime() - now.getTime();
         const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
@@ -344,7 +355,7 @@ export async function userRoutes(
           points: { increment: reward },
           totalSpins: { increment: 1 },
           lastSpin: now,
-          lastSpinDate: now,
+          lastSpinDate: todayString,
         },
         select: {
           id: true,
@@ -359,23 +370,22 @@ export async function userRoutes(
       app.log.info(`[Spin Success] telegramId: ${body.telegramId}, reward: ${reward}, total: ${updatedUser.points}, spins: ${updatedUser.totalSpins}`);
 
       // Referral bonus: first spin by a referred user → +10 to referrer only
-      if (user.referredBy && user.totalSpins === 0) {
+      if (user.referredById && user.totalSpins === 0) {
         try {
           await app.prisma.user.update({
-            where: { telegramId: user.referredBy },
+            where: { telegramId: user.referredById },
             data: {
               points: { increment: 10 },
-              referralPoints: { increment: 10 },
             },
           });
 
-          app.log.info(`[Referral Bonus] +10 to referrer ${user.referredBy} (triggered by first spin of ${body.telegramId})`);
+          app.log.info(`[Referral Bonus] +10 to referrer ${user.referredById} (triggered by first spin of ${body.telegramId})`);
 
           // Notify referrer about the bonus
           const spinnerName = updatedUser.firstName || 'Твій друг';
           const referralBonusMsg = `🎁 *+10 балів за реферала!*\n\n` +
             `${spinnerName} щойно крутнув колесо вперше — ти отримав бонус за запрошення!`;
-          sendTelegramMessage(Number(user.referredBy), referralBonusMsg).catch((err) => {
+          sendTelegramMessage(Number(user.referredById), referralBonusMsg).catch((err) => {
             app.log.error({ err }, 'Failed to send referral bonus notification');
           });
         } catch (refError) {
@@ -392,7 +402,7 @@ export async function userRoutes(
         app.log.error({ err }, 'Failed to send spin notification');
       });
 
-      // Calculate next spin time (next Kyiv midnight)
+      // Calculate next spin time (next server midnight)
       const nextMidnight = getNextKyivMidnight();
 
       return reply.send({
