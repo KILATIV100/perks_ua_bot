@@ -8,6 +8,7 @@ interface TicTacToeProps {
   firstName: string;
   botUsername: string;
   gameIdFromUrl?: string | null;
+  mode?: 'online' | 'offline';
   theme: {
     bgColor: string;
     textColor: string;
@@ -60,14 +61,42 @@ const cellAnimationStyle = `
 .cell-win { animation: winGlow 1s ease-in-out infinite; }
 `;
 
-export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUsername, gameIdFromUrl, theme }: TicTacToeProps) {
+export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUsername, gameIdFromUrl, theme, mode = 'online' }: TicTacToeProps) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [game, setGame] = useState<GameState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [offlineBoard, setOfflineBoard] = useState<Board>(emptyBoard);
+  const [offlineTurn, setOfflineTurn] = useState<'X' | 'O'>('X');
+  const [offlineWinner, setOfflineWinner] = useState<'X' | 'O' | 'draw' | null>(null);
 
-  // Connect to Socket.IO
+  const checkOfflineWinner = (board: Board): 'X' | 'O' | 'draw' | null => {
+    const lines = [
+      [[0, 0], [0, 1], [0, 2]],
+      [[1, 0], [1, 1], [1, 2]],
+      [[2, 0], [2, 1], [2, 2]],
+      [[0, 0], [1, 0], [2, 0]],
+      [[0, 1], [1, 1], [2, 1]],
+      [[0, 2], [1, 2], [2, 2]],
+      [[0, 0], [1, 1], [2, 2]],
+      [[0, 2], [1, 1], [2, 0]],
+    ];
+
+    for (const line of lines) {
+      const [a, b, c] = line;
+      const valA = board[a[0]][a[1]];
+      if (valA && valA === board[b[0]][b[1]] && valA === board[c[0]][c[1]]) {
+        return valA;
+      }
+    }
+
+    const isFull = board.every(row => row.every(cell => cell !== null));
+    return isFull ? 'draw' : null;
+  };
+
+  // Connect to Socket.IO (online mode only)
   useEffect(() => {
+    if (mode !== 'online') return;
     const s = io(apiUrl, {
       transports: ['websocket', 'polling'],
     });
@@ -107,6 +136,26 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
       });
     });
 
+    s.on('game_over', (data: {
+      board: Board;
+      winnerId: string | null;
+      player1?: { id: string; firstName: string; telegramId: string };
+      player2?: { id: string; firstName: string; telegramId: string };
+    }) => {
+      setGame(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          board: data.board,
+          status: 'finished',
+          winnerId: data.winnerId,
+          isMyTurn: false,
+          player1Name: data.player1?.firstName || prev.player1Name,
+          player2Name: data.player2?.firstName || prev.player2Name,
+        };
+      });
+    });
+
     s.on('game:error', (data: { message: string }) => {
       setError(data.message);
       setTimeout(() => setError(null), 3000);
@@ -117,7 +166,7 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     return () => {
       s.disconnect();
     };
-  }, [apiUrl]);
+  }, [apiUrl, mode]);
 
   // Auto-join game from URL param
   useEffect(() => {
@@ -206,7 +255,7 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     if (!game.isMyTurn || game.status !== 'playing') return;
     if (game.board[row][col] !== null) return;
 
-    socket.emit('game:move', {
+    socket.emit('make_move', {
       gameId: game.gameId,
       playerId: game.playerId,
       row,
@@ -223,6 +272,74 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     if (!game?.inviteLink) return;
     navigator.clipboard.writeText(game.inviteLink).catch(() => {});
   }, [game]);
+
+  const handleOfflineMove = (row: number, col: number) => {
+    if (offlineWinner) return;
+    if (offlineBoard[row][col] !== null) return;
+    const nextBoard = offlineBoard.map(r => [...r]) as Board;
+    nextBoard[row][col] = offlineTurn;
+    const winner = checkOfflineWinner(nextBoard);
+    setOfflineBoard(nextBoard);
+    if (winner) {
+      setOfflineWinner(winner);
+    } else {
+      setOfflineTurn(prev => (prev === 'X' ? 'O' : 'X'));
+    }
+  };
+
+  const resetOffline = () => {
+    setOfflineBoard(emptyBoard);
+    setOfflineTurn('X');
+    setOfflineWinner(null);
+  };
+
+  if (mode === 'offline') {
+    const statusText = offlineWinner
+      ? offlineWinner === 'draw'
+        ? '🤝 Нічия!'
+        : `Переміг ${offlineWinner}`
+      : `Хід: ${offlineTurn}`;
+
+    return (
+      <div className="text-center">
+        <style>{cellAnimationStyle}</style>
+        <h3 className="text-lg font-semibold mb-2" style={{ color: theme.textColor }}>
+          Хрестики-нулики (офлайн)
+        </h3>
+        <p className="text-sm mb-4" style={{ color: theme.hintColor }}>
+          {statusText}
+        </p>
+
+        <div className="inline-grid grid-cols-3 gap-2 mb-4">
+          {offlineBoard.map((row, ri) =>
+            row.map((cell, ci) => (
+              <button
+                key={`offline-${ri}-${ci}`}
+                onClick={() => handleOfflineMove(ri, ci)}
+                disabled={!!cell || !!offlineWinner}
+                className={`w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default ${cell ? 'cell-appear' : ''}`}
+                style={{
+                  backgroundColor: cell ? (cell === 'X' ? '#EF444415' : '#3B82F615') : theme.bgColor,
+                  color: cell === 'X' ? '#EF4444' : cell === 'O' ? '#3B82F6' : theme.hintColor,
+                  border: `2px solid ${theme.hintColor}20`,
+                }}
+              >
+                {cell || ''}
+              </button>
+            ))
+          )}
+        </div>
+
+        <button
+          onClick={resetOffline}
+          className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98]"
+          style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+        >
+          Нова гра
+        </button>
+      </div>
+    );
+  }
 
   // Idle state - show create/join buttons
   if (!game) {
