@@ -272,7 +272,7 @@ export async function orderRoutes(
       });
 
       return reply.send({
-        orders: orders.map((order) => ({
+        orders: orders.map((order: (typeof orders)[number]) => ({
           id: order.id,
           status: order.status,
           totalPrice: order.totalPrice.toString(),

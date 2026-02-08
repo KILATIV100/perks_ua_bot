@@ -8,7 +8,7 @@ interface Product {
   volume: string | null;
   price: string;
   category: string;
-  type: 'MENU' | 'MERCH' | 'COFFEE_BEANS';
+  type: 'MENU' | 'MERCH' | 'BEANS';
   imageUrl: string | null;
 }
 
@@ -76,8 +76,8 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true, lo
   // Filter products based on mode
   const filteredByMode = useMemo(() => {
     if (mode === 'shop') {
-      // Shop: only MERCH and COFFEE_BEANS
-      return products.filter(p => p.type === 'MERCH' || p.type === 'COFFEE_BEANS');
+      // Shop: only MERCH and BEANS
+      return products.filter(p => p.type === 'MERCH' || p.type === 'BEANS');
     }
     // Menu: only MENU type products
     return products.filter(p => p.type === 'MENU');
