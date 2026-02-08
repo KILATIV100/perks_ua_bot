@@ -48,6 +48,15 @@ function App() {
   const telegramUser = useMemo(() => {
     const user = WebApp.initDataUnsafe?.user;
     if (user) return { id: user.id, firstName: user.first_name, username: user.username };
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('telegramId');
+    if (id) {
+      return {
+        id: Number(id),
+        firstName: params.get('firstName') || 'Guest',
+        username: params.get('username') || undefined,
+      };
+    }
     return null;
   }, []);
 
