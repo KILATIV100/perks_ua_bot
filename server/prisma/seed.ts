@@ -19,7 +19,8 @@ async function main(): Promise<void> {
   console.log(`📍 Total locations: ${locationCount}`);
 
   // Seed products (always recreate to keep menu up-to-date)
-  await prisma.orderItem.updateMany({ where: { productId: { not: undefined } }, data: { productId: null } });
+  await prisma.orderItem.deleteMany({});
+  await prisma.order.deleteMany({});
   await prisma.product.deleteMany({});
   await prisma.product.createMany({ data: seedProducts });
   console.log(`☕ Created ${seedProducts.length} products`);
