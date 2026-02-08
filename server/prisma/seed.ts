@@ -120,6 +120,11 @@ const products = [
   { name: 'Zavari Italy blend', description: null, volume: '200 г', price: 340, category: 'Кава на продаж', type: 'COFFEE_BEANS' as ProductType, imageUrl: null },
   { name: 'Zavari Guatemala', description: null, volume: '200 г', price: 300, category: 'Кава на продаж', type: 'COFFEE_BEANS' as ProductType, imageUrl: null },
   { name: 'Zavari Santos', description: null, volume: '200 г', price: 340, category: 'Кава на продаж', type: 'COFFEE_BEANS' as ProductType, imageUrl: null },
+  { name: 'Кава Ethiopia', description: 'Зерно, свіжий смак', volume: '250 г', price: 380, category: 'Кава на продаж', type: 'COFFEE_BEANS' as ProductType, imageUrl: null },
+
+  // ===== Мерч (MERCH) =====
+  { name: 'Худі "PerkUp Original"', description: 'Стильне худі з логотипом PerkUp', volume: null, price: 1200, category: 'Мерч', type: 'MERCH' as ProductType, imageUrl: null },
+  { name: 'Термочашка "Coffee Lover"', description: 'Термочашка з фірмовим дизайном', volume: '350 мл', price: 450, category: 'Мерч', type: 'MERCH' as ProductType, imageUrl: null },
 ];
 
 async function main(): Promise<void> {

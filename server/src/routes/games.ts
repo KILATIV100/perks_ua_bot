@@ -259,6 +259,36 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
           },
         });
 
+        // Award +2 points to winner (max 5 points/day from games)
+        if (status === 'FINISHED' && winnerId) {
+          try {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            // Count points earned from game wins today
+            const todayWins = await prisma.gameSession.count({
+              where: {
+                winnerId,
+                status: 'FINISHED',
+                updatedAt: { gte: today },
+                id: { not: data.gameId }, // exclude current game
+              },
+            });
+
+            const pointsEarnedToday = todayWins * 2;
+            if (pointsEarnedToday < 5) {
+              const pointsToAward = Math.min(2, 5 - pointsEarnedToday);
+              await prisma.user.update({
+                where: { id: winnerId },
+                data: { points: { increment: pointsToAward } },
+              });
+              console.log(`[Game] +${pointsToAward} points to winner ${winnerId} (${pointsEarnedToday + pointsToAward}/5 today)`);
+            }
+          } catch (err) {
+            console.error('[Game] Failed to award points:', err);
+          }
+        }
+
         io.to(`game:${data.gameId}`).emit('game:update', {
           board,
           status,

@@ -13,6 +13,15 @@ interface RadioProps {
 
 const RADIO_STREAM_URL = 'https://icecast.skyrock.net/s/natio_mp3_128k';
 
+const radioStyles = `
+@keyframes eqBar {
+  0%, 100% { height: 15%; }
+  25% { height: 80%; }
+  50% { height: 40%; }
+  75% { height: 95%; }
+}
+`;
+
 export function Radio({ theme }: RadioProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -58,6 +67,7 @@ export function Radio({ theme }: RadioProps) {
 
   return (
     <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+      <style>{radioStyles}</style>
       <h3 className="font-semibold mb-4 flex items-center gap-2" style={{ color: theme.textColor }}>
         <span>📻</span> PerkUp Radio
       </h3>
@@ -85,16 +95,15 @@ export function Radio({ theme }: RadioProps) {
 
           {/* Animated equalizer */}
           {isPlaying && (
-            <div className="flex items-end gap-0.5 mt-2 h-4">
-              {[...Array(8)].map((_, i) => (
+            <div className="flex items-end gap-0.5 mt-2 h-5">
+              {[...Array(12)].map((_, i) => (
                 <div
                   key={i}
-                  className="w-1 rounded-full animate-pulse"
+                  className="w-1 rounded-full"
                   style={{
                     backgroundColor: theme.buttonColor,
-                    height: `${Math.random() * 100}%`,
-                    animationDelay: `${i * 0.1}s`,
-                    animationDuration: `${0.4 + Math.random() * 0.4}s`,
+                    animation: `eqBar ${0.6 + (i % 4) * 0.15}s ease-in-out ${i * 0.08}s infinite`,
+                    height: '15%',
                   }}
                 />
               ))}

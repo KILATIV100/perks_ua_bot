@@ -1,10 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import WebApp from '@twa-dev/sdk';
 
 interface WheelOfFortuneProps {
   onSpin: (lat?: number, lng?: number) => Promise<{ reward: number; newBalance: number } | { error: string; message: string } | null>;
   canSpin: boolean;
-  nextSpinAt: string | null;
   theme: {
     bgColor: string;
     textColor: string;
@@ -33,7 +32,7 @@ const SEGMENTS = [
   { value: 10, color: '#FFA500', label: '10' },
 ];
 
-export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFortuneProps) {
+export function WheelOfFortune({ onSpin, canSpin, theme }: WheelOfFortuneProps) {
   const [isSpinning, setIsSpinning] = useState(false);
   const [rotation, setRotation] = useState(0);
   const [result, setResult] = useState<number | null>(null);
@@ -41,19 +40,6 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
   const [locationError, setLocationError] = useState<string | null>(null);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
 
-  const formatTimeRemaining = useCallback(() => {
-    if (!nextSpinAt) return null;
-    const next = new Date(nextSpinAt);
-    const now = new Date();
-    const diffMs = next.getTime() - now.getTime();
-
-    if (diffMs <= 0) return null;
-
-    const hours = Math.floor(diffMs / (1000 * 60 * 60));
-    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-
-    return `${hours}г ${minutes}хв`;
-  }, [nextSpinAt]);
 
   const requestLocation = (): Promise<{ lat: number; lng: number }> => {
     return new Promise((resolve, reject) => {
@@ -164,8 +150,6 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
     }, 4000);
   };
 
-  const timeRemaining = formatTimeRemaining();
-
   return (
     <div className="flex flex-col items-center py-6">
       {/* Wheel container */}
@@ -265,9 +249,9 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
       </button>
 
       {/* Cooldown message */}
-      {!canSpin && timeRemaining && (
+      {!canSpin && !isSpinning && (
         <p className="mt-4 text-center" style={{ color: theme.hintColor }}>
-          Наступне обертання через: <span className="font-semibold">{timeRemaining}</span>
+          🎡 Ви вже крутили колесо сьогодні. Спробуйте завтра!
         </p>
       )}
 
@@ -287,9 +271,9 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
           📍 Правила гри:
         </h3>
         <ul className="text-sm space-y-1" style={{ color: theme.hintColor }}>
-          <li>• Крутіть колесо раз на 24 години</li>
+          <li>• Крутіть колесо раз на добу</li>
           <li>• Виграйте 5, 10 або 15 балів</li>
-          {!isDevMode() && <li>• <strong>Будьте поруч з кав'ярнею</strong> (до 50м)</li>}
+          {!isDevMode() && <li>• <strong>Будьте поруч з кав'ярнею</strong> (до 100м)</li>}
           <li>• Бали можна обміняти на знижки</li>
         </ul>
       </div>
