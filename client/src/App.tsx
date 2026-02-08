@@ -4,10 +4,12 @@ import WebApp from '@twa-dev/sdk';
 import { WheelOfFortune } from './components/WheelOfFortune';
 import { Menu, CartItem } from './components/Menu';
 import { Checkout } from './components/Checkout';
+import { TicTacToe } from './components/TicTacToe';
+import { Radio } from './components/Radio';
 
 // Types
 type LocationStatus = 'active' | 'coming_soon';
-type TabType = 'locations' | 'menu' | 'bonuses';
+type TabType = 'locations' | 'menu' | 'shop' | 'bonuses' | 'funzone';
 
 interface Location {
   id: string;
@@ -131,6 +133,13 @@ function App() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [funZoneTab, setFunZoneTab] = useState<'games' | 'radio'>('games');
+
+  // Check for game_id in URL (deep link from invite)
+  const gameIdFromUrl = useMemo(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('game_id') || null;
+  }, []);
 
   const cartItemCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart]);
 
@@ -144,6 +153,14 @@ function App() {
     WebApp.setHeaderColor(theme.bgColor);
     WebApp.setBackgroundColor(theme.secondaryBgColor);
   }, [theme]);
+
+  // Auto-navigate to game if game_id in URL
+  useEffect(() => {
+    if (gameIdFromUrl) {
+      setActiveTab('funzone');
+      setFunZoneTab('games');
+    }
+  }, [gameIdFromUrl]);
 
   // Sync user with backend (works for Telegram, localStorage fallback, and URL param users)
   useEffect(() => {
@@ -188,7 +205,7 @@ function App() {
 
       setAppUser(user);
 
-      // Check if can spin
+      // Check if can spin (server now uses Kyiv midnight reset)
       if (user.lastSpin) {
         const lastSpin = new Date(user.lastSpin);
         const nextSpin = new Date(lastSpin.getTime() + 24 * 60 * 60 * 1000);
@@ -336,6 +353,14 @@ function App() {
     );
   }
 
+  const tabLabels: Record<TabType, string> = {
+    locations: 'Локації',
+    menu: 'Меню',
+    shop: 'Магазин',
+    bonuses: 'Бонуси',
+    funzone: 'Fun Zone',
+  };
+
   return (
     <div className="min-h-screen" style={{ backgroundColor: theme.secondaryBgColor }}>
       {/* Header */}
@@ -381,22 +406,19 @@ function App() {
           </div>
 
           {/* Tabs */}
-          <div className="flex gap-2 mt-4">
-            {(['locations', 'menu', 'bonuses'] as TabType[]).map(tab => {
-              const labels: Record<TabType, string> = { locations: 'Локації', menu: 'Меню', bonuses: 'Бонуси' };
-              return (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className="flex-1 py-2 px-4 rounded-xl font-medium transition-all"
-                  style={{
-                    backgroundColor: activeTab === tab ? theme.buttonColor : theme.secondaryBgColor,
-                    color: activeTab === tab ? theme.buttonTextColor : theme.textColor,
-                  }}>
-                  {labels[tab]}
-                </button>
-              );
-            })}
+          <div className="flex gap-1 mt-4 overflow-x-auto scrollbar-hide">
+            {(['locations', 'menu', 'shop', 'bonuses', 'funzone'] as TabType[]).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className="flex-shrink-0 py-2 px-3 rounded-xl text-xs font-medium transition-all whitespace-nowrap"
+                style={{
+                  backgroundColor: activeTab === tab ? theme.buttonColor : theme.secondaryBgColor,
+                  color: activeTab === tab ? theme.buttonTextColor : theme.textColor,
+                }}>
+                {tabLabels[tab]}
+              </button>
+            ))}
           </div>
         </div>
       </header>
@@ -421,7 +443,15 @@ function App() {
                     Змінити
                   </button>
                 </div>
-                <Menu apiUrl={API_URL} cart={cart} onCartChange={setCart} theme={theme} canPreorder={selectedLocation.canPreorder} />
+                <Menu
+                  apiUrl={API_URL}
+                  cart={cart}
+                  onCartChange={setCart}
+                  theme={theme}
+                  canPreorder={selectedLocation.canPreorder}
+                  locationName={selectedLocation.name}
+                  mode="menu"
+                />
               </>
             ) : (
               <div className="text-center py-12">
@@ -439,6 +469,22 @@ function App() {
                 </button>
               </div>
             )}
+          </div>
+        ) : activeTab === 'shop' ? (
+          /* Shop Tab - available regardless of location */
+          <div>
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold" style={{ color: theme.textColor }}>Магазин</h2>
+              <p className="text-xs" style={{ color: theme.hintColor }}>Мерч та кава для дому</p>
+            </div>
+            <Menu
+              apiUrl={API_URL}
+              cart={cart}
+              onCartChange={setCart}
+              theme={theme}
+              canPreorder={true}
+              mode="shop"
+            />
           </div>
         ) : activeTab === 'locations' ? (
           <>
@@ -507,6 +553,59 @@ function App() {
               </div>
             )}
           </>
+        ) : activeTab === 'funzone' ? (
+          /* Fun Zone Tab */
+          <div>
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold mb-1" style={{ color: theme.textColor }}>Fun Zone</h2>
+              <p className="text-sm" style={{ color: theme.hintColor }}>Ігри та розваги</p>
+            </div>
+
+            {/* Fun Zone sub-tabs */}
+            <div className="flex gap-2 mb-6">
+              <button
+                onClick={() => setFunZoneTab('games')}
+                className="flex-1 py-2 px-4 rounded-xl text-sm font-medium transition-all"
+                style={{
+                  backgroundColor: funZoneTab === 'games' ? theme.buttonColor : theme.bgColor,
+                  color: funZoneTab === 'games' ? theme.buttonTextColor : theme.textColor,
+                }}
+              >
+                🎮 Ігри
+              </button>
+              <button
+                onClick={() => setFunZoneTab('radio')}
+                className="flex-1 py-2 px-4 rounded-xl text-sm font-medium transition-all"
+                style={{
+                  backgroundColor: funZoneTab === 'radio' ? theme.buttonColor : theme.bgColor,
+                  color: funZoneTab === 'radio' ? theme.buttonTextColor : theme.textColor,
+                }}
+              >
+                📻 Радіо
+              </button>
+            </div>
+
+            {funZoneTab === 'games' ? (
+              <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+                {telegramUser ? (
+                  <TicTacToe
+                    apiUrl={API_URL}
+                    telegramId={telegramUser.id}
+                    firstName={telegramUser.firstName}
+                    botUsername={BOT_USERNAME}
+                    gameIdFromUrl={gameIdFromUrl}
+                    theme={theme}
+                  />
+                ) : (
+                  <div className="text-center py-8">
+                    <p style={{ color: theme.hintColor }}>Увійдіть через Telegram, щоб грати</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Radio theme={theme} />
+            )}
+          </div>
         ) : (
           /* Bonuses Tab */
           <div>
@@ -577,7 +676,7 @@ function App() {
                   <span>👥</span> Запроси друга
                 </h3>
                 <p className="text-sm mb-3" style={{ color: theme.hintColor }}>
-                  Після першого обертання колеса другом ти отримаєш <b style={{ color: theme.textColor }}>+10 балів</b>, а друг — <b style={{ color: theme.textColor }}>+5 балів</b>!
+                  Друг отримає <b style={{ color: theme.textColor }}>+5 балів</b> одразу, а ти — <b style={{ color: theme.textColor }}>+10 балів</b> після його першого обертання колеса!
                 </p>
                 <button
                   onClick={handleInvite}
@@ -614,7 +713,7 @@ function App() {
       </main>
 
       {/* Floating Cart Button */}
-      {activeTab === 'menu' && cartItemCount > 0 && selectedLocation && selectedLocation.canPreorder && (
+      {(activeTab === 'menu' || activeTab === 'shop') && cartItemCount > 0 && (
         <div className="fixed bottom-6 left-4 right-4 z-30">
           <button
             onClick={() => setShowCheckout(true)}

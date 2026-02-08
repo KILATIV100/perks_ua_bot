@@ -17,6 +17,7 @@ export async function productRoutes(
           volume: true,
           price: true,
           category: true,
+          type: true,
           imageUrl: true,
         },
       });

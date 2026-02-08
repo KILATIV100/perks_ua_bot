@@ -5,7 +5,7 @@ export async function locationRoutes(
   _opts: FastifyPluginOptions
 ): Promise<void> {
   // Get all locations
-  app.get('/', async (_request, reply) => {
+  app.get('', async (_request, reply) => {
     const locations = await app.prisma.location.findMany({
       orderBy: { name: 'asc' },
       select: {
@@ -23,7 +23,7 @@ export async function locationRoutes(
   });
 
   // Get location by ID
-  app.get<{ Params: { id: string } }>('/:id', async (request, reply) => {
+  app.get<{ Params: { id: string } }>(':id', async (request, reply) => {
     const { id } = request.params;
 
     const location = await app.prisma.location.findUnique({

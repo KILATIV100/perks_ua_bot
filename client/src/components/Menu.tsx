@@ -8,6 +8,7 @@ interface Product {
   volume: string | null;
   price: string;
   category: string;
+  type: 'MENU' | 'MERCH' | 'COFFEE_BEANS';
   imageUrl: string | null;
 }
 
@@ -29,6 +30,8 @@ interface MenuProps {
     secondaryBgColor: string;
   };
   canPreorder?: boolean;
+  locationName?: string;
+  mode: 'menu' | 'shop';
 }
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -37,9 +40,10 @@ const CATEGORY_ICONS: Record<string, string> = {
   'Не кава': '🍵',
   'Їжа': '🍔',
   'Кава на продаж': '📦',
+  'Мерч': '👕',
 };
 
-export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: MenuProps) {
+export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true, locationName, mode }: MenuProps) {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
@@ -52,7 +56,6 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
 
   const fetchProducts = async (attempt = 1) => {
     const url = `${apiUrl.replace(/\/$/, '')}/api/products`;
-    console.log(`[Menu] Fetching from ${url}`);
     try {
       setLoading(true);
       setFetchError(false);
@@ -70,27 +73,37 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
     }
   };
 
-  const CATEGORY_ORDER = ['Кава', 'Холодні напої', 'Не кава', 'Їжа', 'Кава на продаж'];
+  // Filter products based on mode
+  const filteredByMode = useMemo(() => {
+    if (mode === 'shop') {
+      // Shop: only MERCH and COFFEE_BEANS
+      return products.filter(p => p.type === 'MERCH' || p.type === 'COFFEE_BEANS');
+    }
+    // Menu: only MENU type products
+    return products.filter(p => p.type === 'MENU');
+  }, [products, mode]);
+
+  const CATEGORY_ORDER = ['Кава', 'Холодні напої', 'Не кава', 'Їжа', 'Кава на продаж', 'Мерч'];
 
   const categories = useMemo(() => {
     const cats = new Set<string>();
-    products.forEach(p => cats.add(p.category));
+    filteredByMode.forEach(p => cats.add(p.category));
     return CATEGORY_ORDER.filter(c => cats.has(c)).concat(
       Array.from(cats).filter(c => !CATEGORY_ORDER.includes(c))
     );
-  }, [products]);
+  }, [filteredByMode]);
 
-  // Set first category as active if none selected
+  // Set first category as active if none selected or current not in list
   useEffect(() => {
-    if (categories.length > 0 && !activeCategory) {
+    if (categories.length > 0 && (!activeCategory || !categories.includes(activeCategory))) {
       setActiveCategory(categories[0]);
     }
   }, [categories, activeCategory]);
 
   const filteredProducts = useMemo(() => {
-    if (!activeCategory) return products;
-    return products.filter(p => p.category === activeCategory);
-  }, [products, activeCategory]);
+    if (!activeCategory) return filteredByMode;
+    return filteredByMode.filter(p => p.category === activeCategory);
+  }, [filteredByMode, activeCategory]);
 
   const getCartQuantity = (productId: string) => {
     return cart.find(item => item.product.id === productId)?.quantity || 0;
@@ -123,6 +136,12 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
     }
   };
 
+  // Mark Mall: view-only for menu items
+  const isMarkMall = locationName === 'Mark Mall';
+  const isViewOnly = mode === 'menu' && (isMarkMall || !canPreorder);
+  // Shop items are always orderable regardless of location
+  const canOrder = mode === 'shop' || (!isViewOnly);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -134,29 +153,38 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
 
   return (
     <div>
-      {/* View-only banner */}
-      {!canPreorder && (
+      {/* View-only banner for Menu mode at Mark Mall */}
+      {mode === 'menu' && isMarkMall && (
+        <div className="mb-4 p-3 rounded-xl text-center text-sm" style={{ backgroundColor: '#FFF8E1', color: '#92400e' }}>
+          📋 Тільки для ознайомлення. Замовляйте на місці!
+        </div>
+      )}
+
+      {/* View-only banner for Menu mode without preorder */}
+      {mode === 'menu' && !canPreorder && !isMarkMall && (
         <div className="mb-4 p-3 rounded-xl text-center text-sm" style={{ backgroundColor: '#FFF8E1', color: '#92400e' }}>
           📍 Замовляйте на місці! Попереднє замовлення тут недоступне.
         </div>
       )}
 
       {/* Category tabs */}
-      <div className="flex gap-2 overflow-x-auto pb-3 mb-4 scrollbar-hide">
-        {categories.map(cat => (
-          <button
-            key={cat}
-            onClick={() => setActiveCategory(cat)}
-            className="flex-shrink-0 px-4 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap"
-            style={{
-              backgroundColor: activeCategory === cat ? theme.buttonColor : theme.bgColor,
-              color: activeCategory === cat ? theme.buttonTextColor : theme.textColor,
-            }}
-          >
-            {CATEGORY_ICONS[cat] || '📦'} {cat}
-          </button>
-        ))}
-      </div>
+      {categories.length > 1 && (
+        <div className="flex gap-2 overflow-x-auto pb-3 mb-4 scrollbar-hide">
+          {categories.map(cat => (
+            <button
+              key={cat}
+              onClick={() => setActiveCategory(cat)}
+              className="flex-shrink-0 px-4 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap"
+              style={{
+                backgroundColor: activeCategory === cat ? theme.buttonColor : theme.bgColor,
+                color: activeCategory === cat ? theme.buttonTextColor : theme.textColor,
+              }}
+            >
+              {CATEGORY_ICONS[cat] || '📦'} {cat}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Product list */}
       <div className="space-y-3">
@@ -198,8 +226,8 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
                 </p>
               </div>
 
-              {/* Add/remove buttons (only if preorder is available) */}
-              {canPreorder && (
+              {/* Add/remove buttons (only if ordering is available) */}
+              {canOrder && (
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {qty > 0 ? (
                     <>
@@ -250,9 +278,11 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true }: 
         </div>
       )}
 
-      {!fetchError && products.length === 0 && (
+      {!fetchError && filteredProducts.length === 0 && (
         <div className="text-center py-12">
-          <p style={{ color: theme.hintColor }}>Меню поки пусте</p>
+          <p style={{ color: theme.hintColor }}>
+            {mode === 'shop' ? 'Магазин поки пустий' : 'Меню поки пусте'}
+          </p>
         </div>
       )}
     </div>

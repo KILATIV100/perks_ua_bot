@@ -39,6 +39,47 @@ async function notifyOwnerNewUser(firstName: string | undefined, telegramId: str
   sendTelegramMessage(OWNER_TELEGRAM_ID, message).catch(() => {});
 }
 
+/**
+ * Get today's date string in Kyiv timezone (YYYY-MM-DD) and the Date object for midnight Kyiv
+ */
+function getKyivMidnight(): Date {
+  const now = new Date();
+  // Get Kyiv date string
+  const kyivDateStr = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' }); // YYYY-MM-DD format
+  // Parse as midnight Kyiv time
+  // Create a date at 00:00:00 in Kyiv timezone
+  const kyivMidnight = new Date(kyivDateStr + 'T00:00:00+02:00');
+  // Adjust for DST: Kyiv is UTC+2 in winter, UTC+3 in summer
+  // Use Intl to get the correct offset
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Kyiv',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(now);
+  const kyivHour = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
+  const kyivMinute = parseInt(parts.find(p => p.type === 'minute')?.value || '0');
+  const kyivSecond = parseInt(parts.find(p => p.type === 'second')?.value || '0');
+
+  // Calculate midnight Kyiv as UTC timestamp
+  const nowUtc = now.getTime();
+  const elapsedSinceKyivMidnight = (kyivHour * 3600 + kyivMinute * 60 + kyivSecond) * 1000;
+  return new Date(nowUtc - elapsedSinceKyivMidnight);
+}
+
+/**
+ * Get the next midnight in Kyiv timezone
+ */
+function getNextKyivMidnight(): Date {
+  const currentMidnight = getKyivMidnight();
+  return new Date(currentMidnight.getTime() + 24 * 60 * 60 * 1000);
+}
+
 // Validation schemas - telegramId can be number or string
 const syncUserSchema = z.object({
   telegramId: z.union([z.number(), z.string()]).transform(String),
@@ -61,14 +102,11 @@ const redeemSchema = z.object({
 // Points required for redemption
 const REDEEM_POINTS_REQUIRED = 100;
 
-// Spin cooldown in milliseconds (24 hours)
-const SPIN_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-
 // Possible spin rewards
 const SPIN_REWARDS = [5, 10, 15];
 
-// Maximum distance to spin (50 meters)
-const MAX_SPIN_DISTANCE_METERS = 50;
+// Maximum distance to spin (100 meters)
+const MAX_SPIN_DISTANCE_METERS = 100;
 
 // Dev mode: bypass geolocation check for these telegram IDs
 const DEV_TELEGRAM_IDS = [
@@ -102,7 +140,7 @@ export async function userRoutes(
   _opts: FastifyPluginOptions
 ): Promise<void> {
   // POST /api/user/sync - Sync user data from Telegram
-  app.post('/sync', async (request, reply) => {
+  app.post('sync', async (request, reply) => {
     try {
       const body = syncUserSchema.parse(request.body);
 
@@ -126,6 +164,7 @@ export async function userRoutes(
         }
       }
 
+      // Create or update user; if new + referred, give +5 bonus immediately
       const user = await app.prisma.user.upsert({
         where: { telegramId: body.telegramId },
         update: {
@@ -136,7 +175,8 @@ export async function userRoutes(
           telegramId: body.telegramId,
           username: body.username,
           firstName: body.firstName,
-          points: 0,
+          points: validReferrerId ? 5 : 0,
+          referralPoints: validReferrerId ? 5 : 0,
           totalSpins: 0,
           referredBy: validReferrerId,
         },
@@ -162,12 +202,15 @@ export async function userRoutes(
         if (validReferrerId) {
           const userName = body.firstName || 'Новий користувач';
           const referralMsg = `🎉 *${userName}* приєднався до PerkUp за твоїм запрошенням!\n\n` +
-            `Ти отримаєш *+10 балів* після першого обертання колеса цим другом.`;
+            `Друг отримав *+5 балів* одразу. Ти отримаєш *+10 балів* після першого обертання колеса цим другом.`;
           sendTelegramMessage(Number(validReferrerId), referralMsg).catch(() => {});
+
+          // Notify new user about their referral bonus
+          const bonusMsg = `🎁 *Вітаємо! Ти отримав +5 балів* за реєстрацію по запрошенню!\n\nКрутни колесо, щоб заробити ще більше!`;
+          sendTelegramMessage(Number(body.telegramId), bonusMsg).catch(() => {});
         }
       }
 
-      // telegramId is now a string, no conversion needed
       return reply.send({
         user,
       });
@@ -181,7 +224,7 @@ export async function userRoutes(
   });
 
   // POST /api/user/spin - Spin the wheel of fortune
-  app.post('/spin', async (request, reply) => {
+  app.post('spin', async (request, reply) => {
     try {
       const body = spinSchema.parse(request.body);
 
@@ -230,7 +273,7 @@ export async function userRoutes(
           },
         });
 
-        // Check if user is within 50m of any active location
+        // Check if user is within 100m of any active location
         let nearestLocation: { name: string; distance: number } | null = null;
         let isNearby = false;
 
@@ -272,35 +315,36 @@ export async function userRoutes(
         }
       }
 
-      // Check cooldown
+      // Check cooldown: reset at 00:00 Kyiv time
       const now = new Date();
-      if (user.lastSpin) {
-        const timeSinceLastSpin = now.getTime() - user.lastSpin.getTime();
-        if (timeSinceLastSpin < SPIN_COOLDOWN_MS) {
-          const remainingMs = SPIN_COOLDOWN_MS - timeSinceLastSpin;
-          const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
+      const todayKyivMidnight = getKyivMidnight();
 
-          app.log.info(`[Spin Cooldown] telegramId: ${body.telegramId}, remaining: ${remainingHours}h`);
+      if (user.lastSpinDate && user.lastSpinDate >= todayKyivMidnight) {
+        const nextMidnight = getNextKyivMidnight();
+        const remainingMs = nextMidnight.getTime() - now.getTime();
+        const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
 
-          return reply.status(429).send({
-            error: 'Cooldown',
-            message: `Наступне обертання доступне через ${remainingHours} год.`,
-            remainingMs,
-            nextSpinAt: new Date(user.lastSpin.getTime() + SPIN_COOLDOWN_MS).toISOString(),
-          });
-        }
+        app.log.info(`[Spin Cooldown] telegramId: ${body.telegramId}, remaining: ${remainingHours}h (resets at Kyiv midnight)`);
+
+        return reply.status(429).send({
+          error: 'Cooldown',
+          message: `Наступне обертання доступне через ${remainingHours} год.`,
+          remainingMs,
+          nextSpinAt: nextMidnight.toISOString(),
+        });
       }
 
       // Random reward
       const reward = SPIN_REWARDS[Math.floor(Math.random() * SPIN_REWARDS.length)];
 
-      // Update user
+      // Update user with lastSpin and lastSpinDate
       const updatedUser = await app.prisma.user.update({
         where: { telegramId: body.telegramId },
         data: {
           points: { increment: reward },
           totalSpins: { increment: 1 },
           lastSpin: now,
+          lastSpinDate: now,
         },
         select: {
           id: true,
@@ -314,32 +358,18 @@ export async function userRoutes(
 
       app.log.info(`[Spin Success] telegramId: ${body.telegramId}, reward: ${reward}, total: ${updatedUser.points}, spins: ${updatedUser.totalSpins}`);
 
-      // Referral bonus: first spin by a referred user → +5 to new user, +10 to referrer
+      // Referral bonus: first spin by a referred user → +10 to referrer only
       if (user.referredBy && user.totalSpins === 0) {
         try {
-          await app.prisma.$transaction([
-            // +5 bonus to the new user
-            app.prisma.user.update({
-              where: { telegramId: body.telegramId },
-              data: {
-                points: { increment: 5 },
-                referralPoints: { increment: 5 },
-              },
-            }),
-            // +10 bonus to the referrer
-            app.prisma.user.update({
-              where: { telegramId: user.referredBy },
-              data: {
-                points: { increment: 10 },
-                referralPoints: { increment: 10 },
-              },
-            }),
-          ]);
+          await app.prisma.user.update({
+            where: { telegramId: user.referredBy },
+            data: {
+              points: { increment: 10 },
+              referralPoints: { increment: 10 },
+            },
+          });
 
-          // Update balance in response to reflect the +5 bonus
-          updatedUser.points += 5;
-
-          app.log.info(`[Referral Bonus] +5 to user ${body.telegramId}, +10 to referrer ${user.referredBy}`);
+          app.log.info(`[Referral Bonus] +10 to referrer ${user.referredBy} (triggered by first spin of ${body.telegramId})`);
 
           // Notify referrer about the bonus
           const spinnerName = updatedUser.firstName || 'Твій друг';
@@ -362,15 +392,15 @@ export async function userRoutes(
         app.log.error({ err }, 'Failed to send spin notification');
       });
 
-      // Include referral bonus info in response
-      const isFirstReferralSpin = user.referredBy && user.totalSpins === 0;
+      // Calculate next spin time (next Kyiv midnight)
+      const nextMidnight = getNextKyivMidnight();
 
       return reply.send({
         success: true,
         reward,
-        referralBonus: isFirstReferralSpin ? 5 : 0,
+        referralBonus: 0,
         newBalance: updatedUser.points,
-        nextSpinAt: new Date(now.getTime() + SPIN_COOLDOWN_MS).toISOString(),
+        nextSpinAt: nextMidnight.toISOString(),
       });
     } catch (error) {
       app.log.error({ err: error }, 'Spin error');
@@ -382,7 +412,7 @@ export async function userRoutes(
   });
 
   // POST /api/user/redeem - Redeem points for a drink
-  app.post('/redeem', async (request, reply) => {
+  app.post('redeem', async (request, reply) => {
     try {
       const body = redeemSchema.parse(request.body);
 
@@ -447,9 +477,9 @@ export async function userRoutes(
 
       // Send notification via Telegram bot
       const userName = updatedUser.firstName || 'Друже';
-      const message = `🎁 *${userName}, вітаємо!*\n\nТи обміняв 100 балів на безкоштовний напій!\n\n🎟 *Твій код: ${code}*\n\nПокажи цей код баристі, щоб отримати будь-який напій до 100 грн.\n\n⏰ Код дійсний 15 хвилин.\n\n💰 Залишок балів: *${updatedUser.points}*`;
+      const redeemMessage = `🎁 *${userName}, вітаємо!*\n\nТи обміняв 100 балів на безкоштовний напій!\n\n🎟 *Твій код: ${code}*\n\nПокажи цей код баристі, щоб отримати будь-який напій до 100 грн.\n\n⏰ Код дійсний 15 хвилин.\n\n💰 Залишок балів: *${updatedUser.points}*`;
 
-      sendTelegramMessage(Number(body.telegramId), message).catch((err) => {
+      sendTelegramMessage(Number(body.telegramId), redeemMessage).catch((err) => {
         app.log.error({ err }, 'Failed to send redeem notification');
       });
 
@@ -457,7 +487,7 @@ export async function userRoutes(
         success: true,
         code,
         newBalance: updatedUser.points,
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 minutes
+        expiresAt: expiresAt.toISOString(),
       });
     } catch (error) {
       app.log.error({ err: error }, 'Redeem error');
@@ -469,7 +499,7 @@ export async function userRoutes(
   });
 
   // GET /api/user/:telegramId - Get user data
-  app.get<{ Params: { telegramId: string } }>('/:telegramId', async (request, reply) => {
+  app.get<{ Params: { telegramId: string } }>(':telegramId', async (request, reply) => {
     try {
       const telegramId = request.params.telegramId;
 

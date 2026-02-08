@@ -1,11 +1,14 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import fastifySocketIO from 'fastify-socket.io';
 import { PrismaClient } from '@prisma/client';
 import { locationRoutes } from './routes/locations.js';
 import { orderRoutes } from './routes/orders.js';
 import { userRoutes } from './routes/users.js';
 import { adminRoutes } from './routes/admin.js';
 import { productRoutes } from './routes/products.js';
+import { gameRoutes } from './routes/games.js';
+import { setupGameSockets } from './routes/games.js';
 
 // Fix BigInt JSON serialization
 (BigInt.prototype as any).toJSON = function () {
@@ -76,6 +79,20 @@ app.register(cors, {
   strictPreflight: false,
 });
 
+// Register Socket.IO for real-time games
+app.register(fastifySocketIO, {
+  cors: {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      if (isOriginAllowed(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, false);
+      }
+    },
+    credentials: true,
+  },
+});
+
 // Decorate with Prisma
 app.decorate('prisma', prisma);
 
@@ -90,6 +107,7 @@ app.register(productRoutes, { prefix: '/api/products' });
 app.register(orderRoutes, { prefix: '/api/orders' });
 app.register(userRoutes, { prefix: '/api/user' });
 app.register(adminRoutes, { prefix: '/api/admin' });
+app.register(gameRoutes, { prefix: '/api/games' });
 
 // Graceful shutdown
 const gracefulShutdown = async (): Promise<void> => {
@@ -125,90 +143,96 @@ const autoSeedProducts = async (): Promise<void> => {
     console.log(`[Server] Product count in DB: ${productCount}`);
     if (productCount === 0) {
       const products = [
-        // ===== Кава =====
-        { name: 'Еспресо', description: null, volume: '110 мл', price: 40, category: 'Кава', imageUrl: null },
-        { name: 'Допіо', description: null, volume: '180 мл', price: 60, category: 'Кава', imageUrl: null },
-        { name: 'Американо', description: null, volume: '180 мл', price: 40, category: 'Кава', imageUrl: null },
-        { name: 'Американо з молоком', description: null, volume: '180 мл', price: 50, category: 'Кава', imageUrl: null },
-        { name: 'Макіато', description: 'Еспресо з молоком', volume: '180 мл', price: 50, category: 'Кава', imageUrl: null },
-        { name: 'Капучіно', description: null, volume: '180 мл', price: 55, category: 'Кава', imageUrl: null },
-        { name: 'Капучіно', description: null, volume: '250 мл', price: 65, category: 'Кава', imageUrl: null },
-        { name: 'Капучіно', description: null, volume: '350 мл', price: 85, category: 'Кава', imageUrl: null },
-        { name: 'Лате', description: null, volume: '350 мл', price: 75, category: 'Кава', imageUrl: null },
-        { name: 'Лате', description: null, volume: '450 мл', price: 85, category: 'Кава', imageUrl: null },
-        { name: 'Флет уайт', description: null, volume: '180 мл', price: 65, category: 'Кава', imageUrl: null },
-        { name: 'Флет уайт', description: null, volume: '250 мл', price: 80, category: 'Кава', imageUrl: null },
-        { name: 'Раф', description: null, volume: '250 мл', price: 100, category: 'Кава', imageUrl: null },
-        { name: 'Раф', description: null, volume: '350 мл', price: 150, category: 'Кава', imageUrl: null },
-        { name: 'Фільтр кава', description: null, volume: '250 мл', price: 55, category: 'Кава', imageUrl: null },
-        { name: 'Фільтр кава', description: null, volume: '350 мл', price: 65, category: 'Кава', imageUrl: null },
-        { name: 'Мокачіно', description: null, volume: '350 мл', price: 95, category: 'Кава', imageUrl: null },
-        { name: 'Капуоранж', description: null, volume: '250 мл', price: 90, category: 'Кава', imageUrl: null },
-        { name: 'Капуоранж', description: null, volume: '350 мл', price: 140, category: 'Кава', imageUrl: null },
-        { name: 'Чорний оксамит', description: null, volume: '250 мл', price: 85, category: 'Кава', imageUrl: null },
-        { name: 'Чорний оксамит', description: null, volume: '400 мл', price: 95, category: 'Кава', imageUrl: null },
-        { name: 'Раф дубайський шоколад', description: null, volume: '250 мл', price: 150, category: 'Кава', imageUrl: null },
-        { name: 'Раф дубайський шоколад', description: null, volume: '400 мл', price: 200, category: 'Кава', imageUrl: null },
-        { name: 'Лате сирна груша', description: null, volume: '250 мл', price: 95, category: 'Кава', imageUrl: null },
-        { name: 'Лате сирна груша', description: null, volume: '400 мл', price: 125, category: 'Кава', imageUrl: null },
-        { name: 'Гарбузове лате', description: null, volume: '250 мл', price: 85, category: 'Кава', imageUrl: null },
-        { name: 'Гарбузове лате', description: null, volume: '400 мл', price: 95, category: 'Кава', imageUrl: null },
-        // ===== Холодні напої =====
-        { name: 'ICE-лате', description: null, volume: null, price: 95, category: 'Холодні напої', imageUrl: null },
-        { name: 'ICE-какао', description: null, volume: null, price: 95, category: 'Холодні напої', imageUrl: null },
-        { name: 'ICE-матча', description: null, volume: null, price: 110, category: 'Холодні напої', imageUrl: null },
-        { name: 'ICE-раф', description: null, volume: null, price: 130, category: 'Холодні напої', imageUrl: null },
-        { name: 'Джміль (Бамбл)', description: null, volume: null, price: 110, category: 'Холодні напої', imageUrl: null },
-        { name: 'Еспресо-тонік', description: null, volume: null, price: 95, category: 'Холодні напої', imageUrl: null },
-        { name: 'Матча тонік', description: null, volume: null, price: 110, category: 'Холодні напої', imageUrl: null },
-        { name: 'Матча оранж', description: null, volume: null, price: 110, category: 'Холодні напої', imageUrl: null },
-        { name: 'Лимонад класичний', description: null, volume: null, price: 95, category: 'Холодні напої', imageUrl: null },
-        { name: 'Лимонад манго-маракуя', description: null, volume: null, price: 95, category: 'Холодні напої', imageUrl: null },
-        { name: 'Лимонад полуниця-лічі', description: null, volume: null, price: 95, category: 'Холодні напої', imageUrl: null },
-        { name: 'Апероль', description: 'Безалкогольний', volume: null, price: 95, category: 'Холодні напої', imageUrl: null },
-        { name: 'Блакитна лагуна', description: 'Безалкогольний', volume: null, price: 95, category: 'Холодні напої', imageUrl: null },
-        { name: 'Мохіто', description: 'Безалкогольний', volume: null, price: 110, category: 'Холодні напої', imageUrl: null },
-        { name: 'Фрапе', description: null, volume: null, price: 140, category: 'Холодні напої', imageUrl: null },
-        { name: 'Молочний коктейль', description: null, volume: null, price: 110, category: 'Холодні напої', imageUrl: null },
-        { name: 'Глясе', description: null, volume: '250 мл', price: 95, category: 'Холодні напої', imageUrl: null },
-        { name: 'Coca-Cola', description: null, volume: '0.5 л', price: 35, category: 'Холодні напої', imageUrl: null },
-        { name: 'Fanta', description: null, volume: '0.5 л', price: 35, category: 'Холодні напої', imageUrl: null },
-        { name: 'Sprite', description: null, volume: '0.5 л', price: 35, category: 'Холодні напої', imageUrl: null },
-        { name: 'Енергетик Монстр', description: null, volume: null, price: 90, category: 'Холодні напої', imageUrl: null },
-        { name: 'Енергетик Бьорн', description: null, volume: null, price: 60, category: 'Холодні напої', imageUrl: null },
-        // ===== Не кава =====
-        { name: 'Какао', description: null, volume: '250 мл', price: 65, category: 'Не кава', imageUrl: null },
-        { name: 'Какао', description: null, volume: '350 мл', price: 75, category: 'Не кава', imageUrl: null },
-        { name: 'Матча', description: null, volume: '250 мл', price: 85, category: 'Не кава', imageUrl: null },
-        { name: 'Чай натуральний', description: null, volume: '500 мл', price: 70, category: 'Не кава', imageUrl: null },
-        { name: 'Чай листовий', description: null, volume: '500 мл', price: 40, category: 'Не кава', imageUrl: null },
-        { name: 'Гарячий шоколад', description: null, volume: '350 мл', price: 110, category: 'Не кава', imageUrl: null },
-        { name: 'Глінтвейн б/а', description: null, volume: '250 мл', price: 95, category: 'Не кава', imageUrl: null },
-        { name: 'Глінтвейн б/а', description: null, volume: '400 мл', price: 125, category: 'Не кава', imageUrl: null },
-        { name: 'Бебічіно', description: null, volume: '250 мл', price: 90, category: 'Не кава', imageUrl: null },
-        { name: 'Бебічіно', description: null, volume: '350 мл', price: 130, category: 'Не кава', imageUrl: null },
-        // ===== Їжа =====
-        { name: 'Хот-дог', description: null, volume: null, price: 70, category: 'Їжа', imageUrl: null },
-        { name: 'Бургер', description: null, volume: null, price: 70, category: 'Їжа', imageUrl: null },
-        { name: 'Сендвіч', description: null, volume: null, price: 65, category: 'Їжа', imageUrl: null },
-        { name: 'Київський сирник', description: null, volume: null, price: 90, category: 'Їжа', imageUrl: null },
-        { name: 'Трубочка зі згущеним молоком', description: null, volume: null, price: 55, category: 'Їжа', imageUrl: null },
-        { name: 'Горішок зі згущеним молоком', description: null, volume: null, price: 30, category: 'Їжа', imageUrl: null },
-        { name: 'Макарун', description: null, volume: null, price: 75, category: 'Їжа', imageUrl: null },
-        { name: 'Картопля кремова', description: null, volume: null, price: 65, category: 'Їжа', imageUrl: null },
-        { name: 'Круасан Ньюйоркер', description: null, volume: null, price: 55, category: 'Їжа', imageUrl: null },
-        // ===== Кава на продаж =====
-        { name: 'Zavari Ethiopia', description: null, volume: '200 г', price: 380, category: 'Кава на продаж', imageUrl: null },
-        { name: 'Zavari Italy blend', description: null, volume: '200 г', price: 340, category: 'Кава на продаж', imageUrl: null },
-        { name: 'Zavari Guatemala', description: null, volume: '200 г', price: 300, category: 'Кава на продаж', imageUrl: null },
-        { name: 'Zavari Santos', description: null, volume: '200 г', price: 340, category: 'Кава на продаж', imageUrl: null },
+        // ===== Кава (MENU) =====
+        { name: 'Еспресо', description: null, volume: '110 мл', price: 40, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Допіо', description: null, volume: '180 мл', price: 60, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Американо', description: null, volume: '180 мл', price: 40, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Американо з молоком', description: null, volume: '180 мл', price: 50, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Макіато', description: 'Еспресо з молоком', volume: '180 мл', price: 50, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Капучіно', description: null, volume: '180 мл', price: 55, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Капучіно', description: null, volume: '250 мл', price: 65, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Капучіно', description: null, volume: '350 мл', price: 85, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Лате', description: null, volume: '350 мл', price: 75, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Лате', description: null, volume: '450 мл', price: 85, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Флет уайт', description: null, volume: '180 мл', price: 65, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Флет уайт', description: null, volume: '250 мл', price: 80, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Раф', description: null, volume: '250 мл', price: 100, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Раф', description: null, volume: '350 мл', price: 150, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Фільтр кава', description: null, volume: '250 мл', price: 55, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Фільтр кава', description: null, volume: '350 мл', price: 65, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Мокачіно', description: null, volume: '350 мл', price: 95, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Капуоранж', description: null, volume: '250 мл', price: 90, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Капуоранж', description: null, volume: '350 мл', price: 140, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Чорний оксамит', description: null, volume: '250 мл', price: 85, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Чорний оксамит', description: null, volume: '400 мл', price: 95, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Раф дубайський шоколад', description: null, volume: '250 мл', price: 150, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Раф дубайський шоколад', description: null, volume: '400 мл', price: 200, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Лате сирна груша', description: null, volume: '250 мл', price: 95, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Лате сирна груша', description: null, volume: '400 мл', price: 125, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Гарбузове лате', description: null, volume: '250 мл', price: 85, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Гарбузове лате', description: null, volume: '400 мл', price: 95, category: 'Кава', type: 'MENU' as const, imageUrl: null },
+        // ===== Холодні напої (MENU) =====
+        { name: 'ICE-лате', description: null, volume: null, price: 95, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'ICE-какао', description: null, volume: null, price: 95, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'ICE-матча', description: null, volume: null, price: 110, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'ICE-раф', description: null, volume: null, price: 130, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Джміль (Бамбл)', description: null, volume: null, price: 110, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Еспресо-тонік', description: null, volume: null, price: 95, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Матча тонік', description: null, volume: null, price: 110, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Матча оранж', description: null, volume: null, price: 110, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Лимонад класичний', description: null, volume: null, price: 95, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Лимонад манго-маракуя', description: null, volume: null, price: 95, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Лимонад полуниця-лічі', description: null, volume: null, price: 95, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Апероль', description: 'Безалкогольний', volume: null, price: 95, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Блакитна лагуна', description: 'Безалкогольний', volume: null, price: 95, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Мохіто', description: 'Безалкогольний', volume: null, price: 110, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Фрапе', description: null, volume: null, price: 140, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Молочний коктейль', description: null, volume: null, price: 110, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Глясе', description: null, volume: '250 мл', price: 95, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Coca-Cola', description: null, volume: '0.5 л', price: 35, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Fanta', description: null, volume: '0.5 л', price: 35, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Sprite', description: null, volume: '0.5 л', price: 35, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Енергетик Монстр', description: null, volume: null, price: 90, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        { name: 'Енергетик Бьорн', description: null, volume: null, price: 60, category: 'Холодні напої', type: 'MENU' as const, imageUrl: null },
+        // ===== Не кава (MENU) =====
+        { name: 'Какао', description: null, volume: '250 мл', price: 65, category: 'Не кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Какао', description: null, volume: '350 мл', price: 75, category: 'Не кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Матча', description: null, volume: '250 мл', price: 85, category: 'Не кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Чай натуральний', description: null, volume: '500 мл', price: 70, category: 'Не кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Чай листовий', description: null, volume: '500 мл', price: 40, category: 'Не кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Гарячий шоколад', description: null, volume: '350 мл', price: 110, category: 'Не кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Глінтвейн б/а', description: null, volume: '250 мл', price: 95, category: 'Не кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Глінтвейн б/а', description: null, volume: '400 мл', price: 125, category: 'Не кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Бебічіно', description: null, volume: '250 мл', price: 90, category: 'Не кава', type: 'MENU' as const, imageUrl: null },
+        { name: 'Бебічіно', description: null, volume: '350 мл', price: 130, category: 'Не кава', type: 'MENU' as const, imageUrl: null },
+        // ===== Їжа (MENU) =====
+        { name: 'Хот-дог', description: null, volume: null, price: 70, category: 'Їжа', type: 'MENU' as const, imageUrl: null },
+        { name: 'Бургер', description: null, volume: null, price: 70, category: 'Їжа', type: 'MENU' as const, imageUrl: null },
+        { name: 'Сендвіч', description: null, volume: null, price: 65, category: 'Їжа', type: 'MENU' as const, imageUrl: null },
+        { name: 'Київський сирник', description: null, volume: null, price: 90, category: 'Їжа', type: 'MENU' as const, imageUrl: null },
+        { name: 'Трубочка зі згущеним молоком', description: null, volume: null, price: 55, category: 'Їжа', type: 'MENU' as const, imageUrl: null },
+        { name: 'Горішок зі згущеним молоком', description: null, volume: null, price: 30, category: 'Їжа', type: 'MENU' as const, imageUrl: null },
+        { name: 'Макарун', description: null, volume: null, price: 75, category: 'Їжа', type: 'MENU' as const, imageUrl: null },
+        { name: 'Картопля кремова', description: null, volume: null, price: 65, category: 'Їжа', type: 'MENU' as const, imageUrl: null },
+        { name: 'Круасан Ньюйоркер', description: null, volume: null, price: 55, category: 'Їжа', type: 'MENU' as const, imageUrl: null },
+        // ===== Кава на продаж (COFFEE_BEANS) =====
+        { name: 'Zavari Ethiopia', description: null, volume: '200 г', price: 380, category: 'Кава на продаж', type: 'COFFEE_BEANS' as const, imageUrl: null },
+        { name: 'Zavari Italy blend', description: null, volume: '200 г', price: 340, category: 'Кава на продаж', type: 'COFFEE_BEANS' as const, imageUrl: null },
+        { name: 'Zavari Guatemala', description: null, volume: '200 г', price: 300, category: 'Кава на продаж', type: 'COFFEE_BEANS' as const, imageUrl: null },
+        { name: 'Zavari Santos', description: null, volume: '200 г', price: 340, category: 'Кава на продаж', type: 'COFFEE_BEANS' as const, imageUrl: null },
       ];
 
       await prisma.product.createMany({ data: products });
       console.log(`[Server] Seeded ${products.length} products`);
     }
+  } catch (error) {
+    console.error('[Server] AutoSeed products error:', error);
+  }
+};
 
-    // Auto-seed locations if empty
+// Auto-seed locations if database is empty
+const autoSeedLocations = async (): Promise<void> => {
+  try {
     const locationCount = await prisma.location.count();
     console.log(`[Server] Location count in DB: ${locationCount}`);
     if (locationCount === 0) {
@@ -223,7 +247,7 @@ const autoSeedProducts = async (): Promise<void> => {
       console.log(`[Server] Seeded ${locations.length} locations`);
     }
   } catch (error) {
-    console.error('[Server] AutoSeed error:', error);
+    console.error('[Server] AutoSeed locations error:', error);
   }
 };
 
@@ -236,6 +260,18 @@ const start = async (): Promise<void> => {
 
     await ensureOwnerExists();
     await autoSeedProducts();
+    await autoSeedLocations();
+
+    // Log DB stats
+    const productCount = await prisma.product.count();
+    const locationCount = await prisma.location.count();
+    console.log(`[Server] DB Stats: ${productCount} products, ${locationCount} locations`);
+
+    // Setup Socket.IO game handlers after server is ready
+    app.ready().then(() => {
+      setupGameSockets(app.io, prisma);
+      console.log('[Server] Socket.IO game handlers registered');
+    });
 
     // Log registered routes so 404s are easy to debug
     console.log('[Server] Routes:\n' + app.printRoutes());
@@ -246,7 +282,7 @@ const start = async (): Promise<void> => {
     await app.listen({ port, host });
     console.log(`[Server] Running on http://${host}:${port}`);
   } catch (err) {
-    console.error('❌ Failed to start server:', err);
+    console.error('Failed to start server:', err);
     app.log.error(err);
     process.exit(1);
   }
@@ -258,5 +294,6 @@ start();
 declare module 'fastify' {
   interface FastifyInstance {
     prisma: PrismaClient;
+    io: import('socket.io').Server;
   }
 }
