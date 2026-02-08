@@ -50,8 +50,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'https://backend-production-5ee9
 
 // Bot username for referral links
 const BOT_USERNAME = import.meta.env.VITE_BOT_USERNAME || 'perkup_ua_bot';
-console.log('[PerkUp] Environment:', import.meta.env.MODE);
-console.log('[PerkUp] API_URL:', API_URL);
+console.log('[PerkUp] API:', API_URL);
 
 // Axios instance
 const api = axios.create({
@@ -78,13 +77,8 @@ function useTelegramTheme(): TelegramTheme {
 // Get Telegram user data with localStorage fallback for dev/testing
 function useTelegramUser(): TelegramUser | null {
   return useMemo(() => {
-    console.log('[PerkUp] Getting Telegram user...');
-    console.log('[PerkUp] WebApp.initData:', WebApp.initData);
-    console.log('[PerkUp] WebApp.initDataUnsafe:', JSON.stringify(WebApp.initDataUnsafe));
-
     const user = WebApp.initDataUnsafe?.user;
     if (user) {
-      console.log('[PerkUp] Telegram user found:', user);
       try { localStorage.setItem('perkup_user', JSON.stringify(user)); } catch { /* ignore */ }
       return {
         id: user.id,
@@ -95,12 +89,10 @@ function useTelegramUser(): TelegramUser | null {
     }
 
     // Fallback: try localStorage (for dev mode or if initData is temporarily empty)
-    console.warn('[PerkUp] No user data from Telegram WebApp, trying localStorage...');
     try {
       const saved = localStorage.getItem('perkup_user');
       if (saved) {
         const parsed = JSON.parse(saved);
-        console.log('[PerkUp] Using localStorage fallback user:', parsed.id);
         return {
           id: parsed.id,
           firstName: parsed.first_name || 'Гість',
@@ -114,11 +106,9 @@ function useTelegramUser(): TelegramUser | null {
     const urlParams = new URLSearchParams(window.location.search);
     const devId = urlParams.get('telegramId') || urlParams.get('user_id');
     if (devId) {
-      console.log('[PerkUp] Using URL param fallback, telegramId:', devId);
       return { id: Number(devId), firstName: 'Dev User' };
     }
 
-    console.warn('[PerkUp] No user data available');
     return null;
   }, []);
 }
@@ -158,10 +148,7 @@ function App() {
   // Sync user with backend (works for Telegram, localStorage fallback, and URL param users)
   useEffect(() => {
     if (telegramUser) {
-      console.log('[PerkUp] Syncing user with backend, id:', telegramUser.id, 'source:', WebApp.initDataUnsafe?.user ? 'telegram' : 'fallback');
       syncUser();
-    } else {
-      console.log('[PerkUp] No user to sync');
     }
   }, [telegramUser]);
 
@@ -190,20 +177,14 @@ function App() {
     if (!telegramUser) return;
 
     try {
-      console.log('[PerkUp] Syncing user:', telegramUser.id);
       const response = await api.post<{ user: AppUser }>('/api/user/sync', {
         telegramId: String(telegramUser.id),
         username: telegramUser.username,
         firstName: telegramUser.firstName,
       });
 
-      console.log('[PerkUp] Sync response:', response.data);
-
       const user = response.data.user;
-      if (!user) {
-        console.error('[PerkUp] Sync response has no user object');
-        return;
-      }
+      if (!user) return;
 
       setAppUser(user);
 
@@ -222,13 +203,8 @@ function App() {
         }
       }
 
-      console.log('[PerkUp] User synced successfully:', user);
     } catch (err) {
       console.error('[PerkUp] Sync error:', err);
-      if (axios.isAxiosError(err)) {
-        console.error('[PerkUp] Sync error response:', err.response?.data);
-        console.error('[PerkUp] Sync error status:', err.response?.status);
-      }
     }
   };
 
@@ -239,7 +215,7 @@ function App() {
       const response = await api.get<{ locations: Location[] }>('/api/locations');
       setLocations(response.data.locations);
     } catch (err) {
-      console.error('Fetch error:', err);
+      console.error('[PerkUp] Locations error:', err);
       setError(axios.isAxiosError(err)
         ? err.response?.data?.error || 'Не вдалося завантажити локації'
         : 'Не вдалося завантажити локації');
@@ -278,7 +254,7 @@ function App() {
 
       return { reward: response.data.reward, newBalance: response.data.newBalance };
     } catch (err) {
-      console.error('[PerkUp] Spin error:', err);
+      // Spin error handling
       if (axios.isAxiosError(err)) {
         if (err.response?.status === 429) {
           setCanSpin(false);
@@ -320,7 +296,7 @@ function App() {
       // Hide confetti after 5 seconds
       setTimeout(() => setShowConfetti(false), 5000);
     } catch (err) {
-      console.error('[PerkUp] Redeem error:', err);
+      // Redeem error handling
       if (axios.isAxiosError(err) && err.response?.data?.message) {
         WebApp.showAlert(err.response.data.message);
       } else {
