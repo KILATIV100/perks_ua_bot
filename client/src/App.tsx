@@ -8,7 +8,14 @@ import { TicTacToe } from './components/TicTacToe';
 
 type TabType = 'locations' | 'menu' | 'shop' | 'games' | 'bonuses';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://backend-production-5ee9.up.railway.app';
+const resolveApiUrl = () => {
+  const params = new URLSearchParams(window.location.search);
+  const paramUrl = params.get('api');
+  const windowUrl = (window as unknown as { __PERKUP_API_URL?: string }).__PERKUP_API_URL;
+  return paramUrl || windowUrl || import.meta.env.VITE_API_URL || 'https://backend-production-5ee9.up.railway.app';
+};
+
+const API_URL = resolveApiUrl();
 const BOT_USERNAME = 'perkup_ua_bot';
 
 const api = axios.create({ baseURL: API_URL });
