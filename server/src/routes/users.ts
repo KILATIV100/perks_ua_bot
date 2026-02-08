@@ -77,7 +77,7 @@ function getKyivDateString(date = new Date()): string {
 }
 
 /**
- * Get the next midnight in Kyiv timezone
+ * Get the next midnight in server timezone
  */
 function getNextKyivMidnight(): Date {
   const { year, month, day } = getKyivDateParts(new Date());
@@ -335,7 +335,7 @@ export async function userRoutes(
         const remainingMs = nextMidnight.getTime() - now.getTime();
         const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
 
-        app.log.info(`[Spin Cooldown] telegramId: ${body.telegramId}, remaining: ${remainingHours}h (resets at Kyiv midnight)`);
+        app.log.info(`[Spin Cooldown] telegramId: ${body.telegramId}, remaining: ${remainingHours}h (resets at server midnight)`);
 
         return reply.status(429).send({
           error: 'Cooldown',
