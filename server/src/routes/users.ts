@@ -44,18 +44,9 @@ async function notifyOwnerNewUser(firstName: string | undefined, telegramId: str
  */
 function getKyivMidnight(): Date {
   const now = new Date();
-  // Get Kyiv date string
-  const kyivDateStr = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' }); // YYYY-MM-DD format
-  // Parse as midnight Kyiv time
-  // Create a date at 00:00:00 in Kyiv timezone
-  const kyivMidnight = new Date(kyivDateStr + 'T00:00:00+02:00');
-  // Adjust for DST: Kyiv is UTC+2 in winter, UTC+3 in summer
-  // Use Intl to get the correct offset
+  // Use Intl to get current Kyiv time components (DST-safe)
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Europe/Kyiv',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -67,9 +58,8 @@ function getKyivMidnight(): Date {
   const kyivSecond = parseInt(parts.find(p => p.type === 'second')?.value || '0');
 
   // Calculate midnight Kyiv as UTC timestamp
-  const nowUtc = now.getTime();
   const elapsedSinceKyivMidnight = (kyivHour * 3600 + kyivMinute * 60 + kyivSecond) * 1000;
-  return new Date(nowUtc - elapsedSinceKyivMidnight);
+  return new Date(now.getTime() - elapsedSinceKyivMidnight);
 }
 
 /**

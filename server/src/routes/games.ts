@@ -262,15 +262,25 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
         // Award +2 points to winner (max 5 points/day from games)
         if (status === 'FINISHED' && winnerId) {
           try {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+            // Use Kyiv midnight for daily limit (DST-safe)
+            const now = new Date();
+            const formatter = new Intl.DateTimeFormat('en-US', {
+              timeZone: 'Europe/Kyiv',
+              hour: '2-digit', minute: '2-digit', second: '2-digit',
+              hour12: false,
+            });
+            const parts = formatter.formatToParts(now);
+            const h = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
+            const m = parseInt(parts.find(p => p.type === 'minute')?.value || '0');
+            const s = parseInt(parts.find(p => p.type === 'second')?.value || '0');
+            const kyivMidnight = new Date(now.getTime() - (h * 3600 + m * 60 + s) * 1000);
 
             // Count points earned from game wins today
             const todayWins = await prisma.gameSession.count({
               where: {
                 winnerId,
                 status: 'FINISHED',
-                updatedAt: { gte: today },
+                updatedAt: { gte: kyivMidnight },
                 id: { not: data.gameId }, // exclude current game
               },
             });

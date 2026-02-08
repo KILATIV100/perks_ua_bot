@@ -712,7 +712,14 @@ function App() {
       {(activeTab === 'menu' || activeTab === 'shop') && cartItemCount > 0 && (
         <div className="fixed bottom-6 left-4 right-4 z-30">
           <button
-            onClick={() => setShowCheckout(true)}
+            onClick={() => {
+              if (!selectedLocation) {
+                WebApp.showAlert('Спочатку оберіть локацію для отримання замовлення.');
+                setActiveTab('locations');
+                return;
+              }
+              setShowCheckout(true);
+            }}
             className="w-full py-4 rounded-2xl font-bold text-base flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
             style={{
               backgroundColor: theme.buttonColor,
