@@ -5,6 +5,7 @@ import { WheelOfFortune } from './components/WheelOfFortune';
 import { Menu, CartItem } from './components/Menu';
 import { Radio } from './components/Radio';
 import { TicTacToe } from './components/TicTacToe';
+import { Checkout } from './components/Checkout';
 
 type TabType = 'locations' | 'menu' | 'shop' | 'games' | 'bonuses';
 
@@ -12,11 +13,13 @@ const resolveApiUrl = () => {
   const params = new URLSearchParams(window.location.search);
   const paramUrl = params.get('api');
   const windowUrl = (window as unknown as { __PERKUP_API_URL?: string }).__PERKUP_API_URL;
-  return paramUrl || windowUrl || import.meta.env.VITE_API_URL || 'https://backend-production-5ee9.up.railway.app';
+  const rawUrl = paramUrl || windowUrl || import.meta.env.VITE_API_URL || 'https://backend-production-5ee9.up.railway.app';
+  return rawUrl.replace(/\/+$/, '');
 };
 
 const API_URL = resolveApiUrl();
 const BOT_USERNAME = 'perkup_ua_bot';
+const KYIV_TIME_ZONE = 'Europe/Kyiv';
 
 const api = axios.create({ baseURL: API_URL });
 
@@ -32,6 +35,7 @@ function App() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [gameMode, setGameMode] = useState<'online' | 'offline'>('online');
   const [referralCopied, setReferralCopied] = useState(false);
+  const [showCheckout, setShowCheckout] = useState(false);
 
   const theme = useMemo(() => {
     const params = WebApp.themeParams;
@@ -102,13 +106,40 @@ function App() {
     }
   };
 
+  const getKyivDateString = (date = new Date()) =>
+    date.toLocaleDateString('en-CA', { timeZone: KYIV_TIME_ZONE });
+
+  const getNextKyivMidnight = () => {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: KYIV_TIME_ZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const parts = formatter.formatToParts(new Date());
+    const year = Number(parts.find(part => part.type === 'year')?.value);
+    const month = Number(parts.find(part => part.type === 'month')?.value);
+    const day = Number(parts.find(part => part.type === 'day')?.value);
+    const offsetFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: KYIV_TIME_ZONE,
+      timeZoneName: 'shortOffset',
+      hour: '2-digit',
+    });
+    const nextDayAnchor = new Date(Date.UTC(year, month - 1, day + 1, 12, 0, 0));
+    const offsetValue = offsetFormatter.formatToParts(nextDayAnchor).find(part => part.type === 'timeZoneName')?.value || 'GMT+0';
+    const match = offsetValue.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
+    const offsetHours = match ? Number(match[1]) : 0;
+    const offsetMinutes = match && match[2] ? Number(match[2]) : 0;
+    const totalOffsetMinutes = offsetHours * 60 + Math.sign(offsetHours) * offsetMinutes;
+    const utcMillis = Date.UTC(year, month - 1, day + 1, 0, 0, 0) - totalOffsetMinutes * 60 * 1000;
+    return new Date(utcMillis);
+  };
+
   const checkSpinAvailability = (lastSpinDate: string | null) => {
-    const today = new Date().toLocaleDateString('en-CA');
+    const today = getKyivDateString();
     if (lastSpinDate === today) {
       setCanSpin(false);
-      const tomorrow = new Date();
-      tomorrow.setHours(24, 0, 0, 0);
-      setNextSpinAt(tomorrow.toISOString());
+      setNextSpinAt(getNextKyivMidnight().toISOString());
     } else {
       setCanSpin(true);
     }
@@ -182,15 +213,53 @@ function App() {
         )}
 
         {(activeTab === 'menu' || activeTab === 'shop') && (
-          <Menu 
-            apiUrl={API_URL} 
-            cart={cart} 
-            onCartChange={setCart} 
-            theme={theme} 
-            canPreorder={activeTab === 'menu' ? selectedLocation?.canPreorder : true}
-            locationName={selectedLocation?.name}
-            mode={activeTab === 'menu' ? 'menu' : 'shop'}
-          />
+          <>
+            {(() => {
+              const orderLocation = activeTab === 'menu' ? selectedLocation : (selectedLocation || locations[0]);
+              const totalAmount = cart.reduce((sum, item) => sum + parseFloat(item.product.price) * item.quantity, 0);
+              return (
+                <>
+            <Menu
+              apiUrl={API_URL}
+              cart={cart}
+              onCartChange={setCart}
+              theme={theme}
+              canPreorder={activeTab === 'menu' ? selectedLocation?.canPreorder : true}
+              locationName={selectedLocation?.name}
+              mode={activeTab === 'menu' ? 'menu' : 'shop'}
+            />
+
+            {cart.length > 0 && orderLocation && telegramUser && (
+              <div className="fixed bottom-20 left-0 right-0 z-20 px-4">
+                <button
+                  onClick={() => setShowCheckout(true)}
+                  className="w-full py-4 rounded-2xl font-bold text-base shadow-lg transition-all active:scale-[0.98]"
+                  style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+                >
+                  Оформити замовлення — {totalAmount} грн
+                </button>
+              </div>
+            )}
+
+            {showCheckout && orderLocation && telegramUser && (
+              <Checkout
+                apiUrl={API_URL}
+                cart={cart}
+                telegramId={telegramUser.id}
+                locationId={orderLocation.id}
+                locationName={orderLocation.name}
+                theme={theme}
+                onClose={() => setShowCheckout(false)}
+                onSuccess={() => {
+                  setShowCheckout(false);
+                  setCart([]);
+                }}
+              />
+            )}
+                </>
+              );
+            })()}
+          </>
         )}
 
         {activeTab === 'games' && (

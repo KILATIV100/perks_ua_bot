@@ -39,20 +39,52 @@ async function notifyOwnerNewUser(firstName: string | undefined, telegramId: str
   sendTelegramMessage(OWNER_TELEGRAM_ID, message).catch(() => {});
 }
 
+const KYIV_TIME_ZONE = 'Europe/Kyiv';
+
+function getKyivDateParts(date = new Date()): { year: number; month: number; day: number } {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: KYIV_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = formatter.formatToParts(date);
+  const year = Number(parts.find(part => part.type === 'year')?.value);
+  const month = Number(parts.find(part => part.type === 'month')?.value);
+  const day = Number(parts.find(part => part.type === 'day')?.value);
+  return { year, month, day };
+}
+
+function getKyivOffsetMinutes(date = new Date()): number {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: KYIV_TIME_ZONE,
+    timeZoneName: 'shortOffset',
+    hour: '2-digit',
+  });
+  const offsetValue = formatter.formatToParts(date).find(part => part.type === 'timeZoneName')?.value || 'GMT+0';
+  const match = offsetValue.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
+  if (!match) return 0;
+  const hours = Number(match[1]);
+  const minutes = match[2] ? Number(match[2]) : 0;
+  return hours * 60 + Math.sign(hours) * minutes;
+}
+
 /**
- * Get today's date string in server timezone (YYYY-MM-DD)
+ * Get today's date string in Kyiv timezone (YYYY-MM-DD)
  */
-function getServerDateString(date = new Date()): string {
-  return date.toLocaleDateString('en-CA');
+function getKyivDateString(date = new Date()): string {
+  return date.toLocaleDateString('en-CA', { timeZone: KYIV_TIME_ZONE });
 }
 
 /**
  * Get the next midnight in server timezone
  */
-function getNextServerMidnight(): Date {
-  const next = new Date();
-  next.setHours(24, 0, 0, 0);
-  return next;
+function getNextKyivMidnight(): Date {
+  const { year, month, day } = getKyivDateParts(new Date());
+  const nextDay = new Date(Date.UTC(year, month - 1, day + 1, 12, 0, 0));
+  const offsetMinutes = getKyivOffsetMinutes(nextDay);
+  const utcMillis = Date.UTC(year, month - 1, day + 1, 0, 0, 0) - offsetMinutes * 60 * 1000;
+  return new Date(utcMillis);
 }
 
 // Validation schemas - telegramId can be number or string
@@ -139,12 +171,15 @@ export async function userRoutes(
         }
       }
 
+      const isOwner = String(body.telegramId) === OWNER_TELEGRAM_ID;
+
       // Create or update user; if new + referred, give +5 bonus immediately
       const user = await app.prisma.user.upsert({
         where: { telegramId: body.telegramId },
         update: {
           username: body.username,
           firstName: body.firstName,
+          ...(isOwner ? { role: 'OWNER' } : {}),
         },
         create: {
           telegramId: body.telegramId,
@@ -153,6 +188,7 @@ export async function userRoutes(
           points: validReferrerId ? 5 : 0,
           totalSpins: 0,
           referredById: validReferrerId,
+          role: isOwner ? 'OWNER' : 'USER',
         },
         select: {
           id: true,
@@ -293,9 +329,9 @@ export async function userRoutes(
       // Check cooldown: reset at server midnight
       const now = new Date();
 
-      const todayString = getServerDateString(now);
+      const todayString = getKyivDateString(now);
       if (user.lastSpinDate && user.lastSpinDate === todayString) {
-        const nextMidnight = getNextServerMidnight();
+        const nextMidnight = getNextKyivMidnight();
         const remainingMs = nextMidnight.getTime() - now.getTime();
         const remainingHours = Math.ceil(remainingMs / (60 * 60 * 1000));
 
@@ -367,7 +403,7 @@ export async function userRoutes(
       });
 
       // Calculate next spin time (next server midnight)
-      const nextMidnight = getNextServerMidnight();
+      const nextMidnight = getNextKyivMidnight();
 
       return reply.send({
         success: true,

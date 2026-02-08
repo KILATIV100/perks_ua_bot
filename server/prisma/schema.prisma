@@ -118,6 +118,9 @@ model Order {
   totalPrice Decimal     @db.Decimal(10, 2)
   paymentMethod String   @default("cash")
   pickupMinutes Int      @default(10)
+  deliveryType String    @default("pickup")
+  shippingAddr String?
+  phone        String?
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
   items      OrderItem[]

@@ -98,7 +98,8 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
   useEffect(() => {
     if (mode !== 'online') return;
     const s = io(apiUrl, {
-      transports: ['websocket', 'polling'],
+      transports: ['websocket'],
+      query: { telegramId: String(telegramId) },
     });
 
     s.on('connect', () => {
@@ -106,9 +107,7 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     });
 
     s.on('game:started', () => {
-      if (game) {
-        setGame(prev => prev ? { ...prev, status: 'playing' } : null);
-      }
+      setGame(prev => prev ? { ...prev, status: 'playing' } : null);
     });
 
     s.on('game:update', (data: {
@@ -166,7 +165,7 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     return () => {
       s.disconnect();
     };
-  }, [apiUrl, mode]);
+  }, [apiUrl, mode, telegramId]);
 
   // Auto-join game from URL param
   useEffect(() => {
