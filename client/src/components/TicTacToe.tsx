@@ -49,6 +49,7 @@ const scoreLabelStyle = (color: string) => ({
 
 export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUsername, gameIdFromUrl, theme, mode = 'online' }: TicTacToeProps) {
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [socketConnected, setSocketConnected] = useState(false);
   const [game, setGame] = useState<GameState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -118,6 +119,11 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
 
     s.on('connect', () => {
       console.log('[TicTacToe] Socket connected');
+      setSocketConnected(true);
+    });
+
+    s.on('disconnect', () => {
+      setSocketConnected(false);
     });
 
     s.on('game:started', () => {
@@ -177,6 +183,7 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     setSocket(s);
 
     return () => {
+      setSocketConnected(false);
       s.disconnect();
     };
   }, [apiUrl, selectedMode, telegramId]);
@@ -192,6 +199,9 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     setLoading(true);
     setError(null);
     try {
+      if (!socketConnected) {
+        throw new Error('Socket not connected');
+      }
       const response = await axios.post(`${apiUrl}/api/games/create`, {
         telegramId: String(telegramId),
       });
@@ -219,7 +229,8 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
       socket?.emit('game:join', createdGame.id);
     } catch (err) {
       console.error('[TicTacToe] Create error:', err);
-      setError('Не вдалося створити гру');
+      const fallbackMessage = socketConnected ? 'Не вдалося створити гру' : 'Немає зʼєднання з сервером гри';
+      setError(fallbackMessage);
     } finally {
       setLoading(false);
     }
@@ -229,6 +240,9 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     setLoading(true);
     setError(null);
     try {
+      if (!socketConnected) {
+        throw new Error('Socket not connected');
+      }
       const response = await axios.post(`${apiUrl}/api/games/join`, {
         telegramId: String(telegramId),
         gameId,
@@ -257,7 +271,8 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
       socket?.emit('game:join', gameId);
     } catch (err: any) {
       console.error('[TicTacToe] Join error:', err);
-      setError(err.response?.data?.error || 'Не вдалося приєднатися');
+      const fallbackMessage = socketConnected ? 'Не вдалося приєднатися' : 'Немає зʼєднання з сервером гри';
+      setError(err.response?.data?.error || fallbackMessage);
     } finally {
       setLoading(false);
     }
@@ -461,11 +476,11 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
               </div>
             </div>
 
-            <div className="inline-grid grid-cols-3 gap-3 mx-auto">
+            <div className="grid grid-cols-3 gap-3 w-full max-w-[300px] mx-auto">
               {localBoard.map((cell, index) => (
                 <button
                   key={`local-${index}`}
-                  className="w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
+                  className="aspect-square w-full rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
                   onClick={() => handleLocalMove(index)}
                   disabled={!!localWinner || cell !== null}
                   style={{
@@ -508,11 +523,11 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
                 <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{aiScores.ai}</div>
               </div>
             </div>
-            <div className="inline-grid grid-cols-3 gap-3 mx-auto">
+            <div className="grid grid-cols-3 gap-3 w-full max-w-[300px] mx-auto">
               {aiBoard.map((cell, index) => (
                 <button
                   key={`ai-${index}`}
-                  className="w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
+                  className="aspect-square w-full rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
                   onClick={() => handleAiMove(index)}
                   disabled={aiThinking || !!aiWinner || cell !== null}
                   style={{
@@ -561,10 +576,15 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
                   className="mt-3 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
                   style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
                   onClick={handleJoinRoom}
-                  disabled={loading}
+                  disabled={loading || !socketConnected}
                 >
-                  {loading ? 'Підключаємо...' : 'Створити/Приєднатись'}
+                  {loading ? 'Підключаємо...' : socketConnected ? 'Створити/Приєднатись' : 'Підключення...'}
                 </button>
+                {!socketConnected && (
+                  <p className="mt-3 text-sm" style={{ color: theme.hintColor }}>
+                    Підключення до сервера гри...
+                  </p>
+                )}
                 {error && <p className="mt-3 text-sm text-red-200">{error}</p>}
               </div>
             )}
@@ -578,11 +598,11 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
                 <div className="text-center mb-4 text-sm" style={{ color: theme.hintColor }}>
                   {onlineStatusText()}
                 </div>
-                <div className="inline-grid grid-cols-3 gap-3 mx-auto">
+                <div className="grid grid-cols-3 gap-3 w-full max-w-[300px] mx-auto">
                   {flattenedOnlineBoard.map((cell, index) => (
                     <button
                       key={`online-${index}`}
-                      className="w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
+                      className="aspect-square w-full rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
                       onClick={() => handleOnlineCellClick(index)}
                       disabled={game.status !== 'playing' || !game.isMyTurn || cell !== null}
                       style={{

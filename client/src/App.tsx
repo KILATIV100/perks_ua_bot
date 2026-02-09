@@ -34,7 +34,7 @@ function App() {
   const [showTerms, setShowTerms] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [gameMode, setGameMode] = useState<'online' | 'offline'>('online');
-  const [funZoneGame, setFunZoneGame] = useState<'tic-tac-toe' | 'perkie-catch' | 'barista-rush' | 'memory-coffee' | 'perkie-jump' | 'radio'>('tic-tac-toe');
+  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe' | 'perky_catch' | 'barista_rush' | 'memory_coffee' | 'perky_jump' | 'radio'>('tic_tac_toe');
   const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
 
@@ -272,11 +272,11 @@ function App() {
               </p>
               <div className="grid grid-cols-2 gap-2 mt-4">
                 {[
-                  { id: 'tic-tac-toe', label: 'Хрестики-нулики', icon: '❌⭕' },
-                  { id: 'perkie-catch', label: 'Perkie Catch', icon: '☕' },
-                  { id: 'barista-rush', label: 'Barista Rush', icon: '⚡' },
-                  { id: 'memory-coffee', label: 'Memory Coffee', icon: '🧠' },
-                  { id: 'perkie-jump', label: 'Perkie Jump', icon: '🪂' },
+                  { id: 'tic_tac_toe', label: 'Хрестики-нулики', icon: '❌⭕' },
+                  { id: 'perky_catch', label: 'Perky Catch', icon: '☕' },
+                  { id: 'barista_rush', label: 'Barista Rush', icon: '⚡' },
+                  { id: 'memory_coffee', label: 'Memory Coffee', icon: '🧠' },
+                  { id: 'perky_jump', label: 'Perky Jump', icon: '🪂' },
                   { id: 'radio', label: 'PerkUp Radio', icon: '📻' },
                 ].map((item) => (
                   <button
@@ -295,7 +295,7 @@ function App() {
               </div>
             </div>
 
-            {funZoneGame === 'tic-tac-toe' && (
+            {funZoneGame === 'tic_tac_toe' && (
               telegramUser ? (
                 <TicTacToe
                   apiUrl={API_URL}
@@ -317,7 +317,7 @@ function App() {
 
             {funZoneGame === 'radio' && <Radio theme={theme} />}
 
-            {['perkie-catch', 'barista-rush', 'memory-coffee', 'perkie-jump'].includes(funZoneGame) && (
+            {['perky_catch', 'barista_rush', 'memory_coffee', 'perky_jump'].includes(funZoneGame) && (
               <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
                 <p className="text-sm" style={{ color: theme.hintColor }}>
                   Ця гра ще готується. Скоро додамо! 🚀
