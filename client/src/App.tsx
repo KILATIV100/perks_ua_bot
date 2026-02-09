@@ -5,7 +5,7 @@ import { WheelOfFortune } from './components/WheelOfFortune';
 import { Menu, CartItem } from './components/Menu';
 import { Radio } from './components/Radio';
 import { TicTacToe } from './components/TicTacToe';
-import { PerkyCoffeeCatcher } from './components/PerkyCoffeeCatcher';
+import { PerkyJump } from './components/PerkyJump';
 import { Checkout } from './components/Checkout';
 
 type TabType = 'locations' | 'menu' | 'shop' | 'games' | 'bonuses';
@@ -35,7 +35,8 @@ function App() {
   const [showTerms, setShowTerms] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [gameMode] = useState<'online' | 'offline'>('offline');
-  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe' | 'perky_catch' | 'barista_rush' | 'memory_coffee' | 'perky_jump' | 'radio'>('tic_tac_toe');
+  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe' | 'perky_jump'>('tic_tac_toe');
+  const [isGameFullscreen, setIsGameFullscreen] = useState(false);
   const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
 
@@ -268,15 +269,14 @@ function App() {
               <div className="grid grid-cols-2 gap-2 mt-4">
                 {[
                   { id: 'tic_tac_toe', label: 'Хрестики-нулики', icon: '❌⭕' },
-                  { id: 'perky_catch', label: 'Perky Catch', icon: '☕' },
-                  { id: 'barista_rush', label: 'Barista Rush', icon: '⚡' },
-                  { id: 'memory_coffee', label: 'Memory Coffee', icon: '🧠' },
                   { id: 'perky_jump', label: 'Perky Jump', icon: '🪂' },
-                  { id: 'radio', label: 'PerkUp Radio', icon: '📻' },
                 ].map((item) => (
                   <button
                     key={item.id}
-                    onClick={() => setFunZoneGame(item.id as typeof funZoneGame)}
+                    onClick={() => {
+                      setFunZoneGame(item.id as typeof funZoneGame);
+                      setIsGameFullscreen(true);
+                    }}
                     className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
                     style={{
                       backgroundColor: funZoneGame === item.id ? theme.buttonColor : theme.secondaryBgColor,
@@ -290,32 +290,41 @@ function App() {
               </div>
             </div>
 
-            {funZoneGame === 'tic_tac_toe' && (
-              telegramUser ? (
-                <TicTacToe
-                  theme={theme}
-                  mode={gameMode}
-                />
-              ) : (
-                <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
-                  <p className="text-sm" style={{ color: theme.hintColor }}>
-                    Потрібен Telegram акаунт, щоб запускати онлайн-ігри.
-                  </p>
+            <Radio theme={theme} />
+
+            {isGameFullscreen && (
+              <div className="fixed inset-0 z-50 flex flex-col" style={{ backgroundColor: theme.bgColor }}>
+                <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: `${theme.hintColor}30` }}>
+                  <h3 className="font-semibold" style={{ color: theme.textColor }}>
+                    {funZoneGame === 'tic_tac_toe' ? 'Хрестики-нулики' : 'Perky Jump'}
+                  </h3>
+                  <button
+                    onClick={() => setIsGameFullscreen(false)}
+                    className="px-3 py-1 rounded-lg text-sm font-medium"
+                    style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
+                  >
+                    Закрити
+                  </button>
                 </div>
-              )
-            )}
-
-            {funZoneGame === 'perky_catch' && (
-              <PerkyCoffeeCatcher theme={theme} />
-            )}
-
-            {funZoneGame === 'radio' && <Radio theme={theme} />}
-
-            {['barista_rush', 'memory_coffee', 'perky_jump'].includes(funZoneGame) && (
-              <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
-                <p className="text-sm" style={{ color: theme.hintColor }}>
-                  Ця гра ще готується. Скоро додамо! 🚀
-                </p>
+                <div className="flex-1 overflow-auto p-4">
+                  {funZoneGame === 'tic_tac_toe' && (
+                    telegramUser ? (
+                      <TicTacToe
+                        theme={theme}
+                        mode={gameMode}
+                      />
+                    ) : (
+                      <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
+                        <p className="text-sm" style={{ color: theme.hintColor }}>
+                          Потрібен Telegram акаунт, щоб запускати онлайн-ігри.
+                        </p>
+                      </div>
+                    )
+                  )}
+                  {funZoneGame === 'perky_jump' && (
+                    <PerkyJump />
+                  )}
+                </div>
               </div>
             )}
           </div>
