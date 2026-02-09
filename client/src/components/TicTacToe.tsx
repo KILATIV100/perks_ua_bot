@@ -43,132 +43,9 @@ const emptyBoard: Board = [
   [null, null, null],
 ];
 
-const fancyGameStyles = `
-@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700;800&display=swap');
-.tictactoe-container { font-family: 'Poppins', sans-serif; }
-.tictactoe-gradient { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-.tictactoe-cell {
-  width: 100px;
-  height: 100px;
-  background: white;
-  border: none;
-  border-radius: 12px;
-  font-size: 32px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-}
-.tictactoe-cell:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
-}
-.tictactoe-cell.x { color: #667eea; }
-.tictactoe-cell.o { color: #764ba2; }
-.tictactoe-cell:disabled { cursor: not-allowed; }
-.tictactoe-status {
-  background: rgba(255, 255, 255, 0.15);
-  backdrop-filter: blur(10px);
-  border-radius: 16px;
-  padding: 20px;
-  margin: 20px auto;
-  max-width: 360px;
-  color: white;
-  text-align: center;
-  font-weight: 600;
-  font-size: 18px;
-}
-.tictactoe-mode-btn {
-  padding: 12px 24px;
-  border: 2px solid white;
-  background: transparent;
-  color: white;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: 600;
-  transition: all 0.3s ease;
-}
-.tictactoe-mode-btn.active {
-  background: white;
-  color: #667eea;
-}
-.tictactoe-mode-btn:hover { transform: scale(1.05); }
-.tictactoe-online-box {
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(10px);
-  border-radius: 16px;
-  padding: 20px;
-  margin: 20px auto;
-  max-width: 360px;
-  color: white;
-}
-.tictactoe-input {
-  width: 100%;
-  padding: 12px;
-  margin: 8px 0;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.1);
-  color: white;
-  font-weight: 600;
-}
-.tictactoe-input::placeholder { color: rgba(255, 255, 255, 0.6); }
-.tictactoe-primary {
-  width: 100%;
-  padding: 12px;
-  margin-top: 12px;
-  background: white;
-  color: #667eea;
-  border: none;
-  border-radius: 8px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-.tictactoe-primary:hover {
-  transform: scale(1.02);
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
-}
-.tictactoe-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.tictactoe-reset {
-  display: block;
-  margin: 20px auto;
-  padding: 12px 32px;
-  background: white;
-  color: #667eea;
-  border: none;
-  border-radius: 8px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-.tictactoe-reset:hover { transform: scale(1.05); }
-.tictactoe-scoreboard {
-  display: flex;
-  justify-content: center;
-  gap: 40px;
-  color: white;
-  font-weight: 600;
-  margin: 20px 0;
-}
-.tictactoe-score-number {
-  font-size: 32px;
-  font-weight: 800;
-}
-.tictactoe-loading {
-  display: inline-block;
-  width: 20px;
-  height: 20px;
-  border: 3px solid rgba(255, 255, 255, 0.3);
-  border-top: 3px solid white;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-`;
+const scoreLabelStyle = (color: string) => ({
+  color,
+});
 
 export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUsername, gameIdFromUrl, theme, mode = 'online' }: TicTacToeProps) {
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -536,15 +413,14 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
   };
 
   return (
-    <div className="tictactoe-container tictactoe-gradient min-h-[720px] w-full overflow-auto flex flex-col rounded-3xl">
-      <style>{fancyGameStyles}</style>
-      <header className="text-center pt-8 px-4">
-        <h1 className="text-4xl md:text-5xl font-bold text-white mb-2">Хрестики-Нулики</h1>
-        <p className="text-white text-opacity-80 text-lg">Виберіть режим гри</p>
+    <div className="space-y-6">
+      <header className="text-center">
+        <h1 className="text-2xl font-bold mb-2" style={{ color: theme.textColor }}>Хрестики-Нулики</h1>
+        <p className="text-sm" style={{ color: theme.hintColor }}>Виберіть режим гри</p>
       </header>
 
-      <main className="flex-1 w-full px-4 pb-8">
-        <div className="flex gap-3 justify-center flex-wrap mt-6">
+      <main className="space-y-6">
+        <div className="flex gap-3 justify-center flex-wrap">
           {([
             { id: 'local', label: '🎮 Локально (2 гравців)' },
             { id: 'ai', label: '🤖 проти AI' },
@@ -553,7 +429,11 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
             <button
               key={entry.id}
               onClick={() => setSelectedMode(entry.id)}
-              className={`tictactoe-mode-btn ${selectedMode === entry.id ? 'active' : ''}`}
+              className="px-4 py-2 rounded-xl text-sm font-medium transition-all"
+              style={{
+                backgroundColor: selectedMode === entry.id ? theme.buttonColor : theme.secondaryBgColor,
+                color: selectedMode === entry.id ? theme.buttonTextColor : theme.textColor,
+              }}
             >
               {entry.label}
             </button>
@@ -561,102 +441,129 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
         </div>
 
         {selectedMode === 'local' && (
-          <div className="block">
-            <div className="tictactoe-status" id="status">
+          <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+            <div className="text-center mb-4 text-sm font-medium" style={{ color: theme.textColor }}>
               {getLocalStatus()}
             </div>
 
-            <div className="tictactoe-scoreboard">
+            <div className="flex justify-center gap-8 mb-6">
               <div className="text-center">
-                <div>Гравець 1</div>
-                <div className="tictactoe-score-number">{localScores.player1}</div>
+                <div style={scoreLabelStyle(theme.hintColor)}>Гравець 1</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{localScores.player1}</div>
               </div>
               <div className="text-center">
-                <div>Нічиї</div>
-                <div className="tictactoe-score-number">{localScores.draws}</div>
+                <div style={scoreLabelStyle(theme.hintColor)}>Нічиї</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{localScores.draws}</div>
               </div>
               <div className="text-center">
-                <div>Гравець 2</div>
-                <div className="tictactoe-score-number">{localScores.player2}</div>
+                <div style={scoreLabelStyle(theme.hintColor)}>Гравець 2</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{localScores.player2}</div>
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3 mx-auto max-w-[320px] mt-10">
+            <div className="inline-grid grid-cols-3 gap-3 mx-auto">
               {localBoard.map((cell, index) => (
                 <button
                   key={`local-${index}`}
-                  className={`tictactoe-cell ${cell === 'X' ? 'x' : ''} ${cell === 'O' ? 'o' : ''}`}
+                  className="w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
                   onClick={() => handleLocalMove(index)}
                   disabled={!!localWinner || cell !== null}
+                  style={{
+                    backgroundColor: theme.secondaryBgColor,
+                    color: cell === 'X' ? '#667eea' : cell === 'O' ? '#764ba2' : theme.textColor,
+                    border: `2px solid ${theme.hintColor}20`,
+                  }}
                 >
                   {renderCellValue(cell)}
                 </button>
               ))}
             </div>
 
-            <button className="tictactoe-reset" onClick={resetLocalGame}>
+            <button
+              className="mt-6 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+              style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+              onClick={resetLocalGame}
+            >
               Нова гра
             </button>
           </div>
         )}
 
         {selectedMode === 'ai' && (
-          <div className="block">
-            <div className="tictactoe-status">{getAiStatus()}</div>
-            <div className="tictactoe-scoreboard">
+          <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+            <div className="text-center mb-4 text-sm font-medium" style={{ color: theme.textColor }}>
+              {getAiStatus()}
+            </div>
+            <div className="flex justify-center gap-8 mb-6">
               <div className="text-center">
-                <div>Ти</div>
-                <div className="tictactoe-score-number">{aiScores.player}</div>
+                <div style={scoreLabelStyle(theme.hintColor)}>Ти</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{aiScores.player}</div>
               </div>
               <div className="text-center">
-                <div>Нічиї</div>
-                <div className="tictactoe-score-number">{aiScores.draws}</div>
+                <div style={scoreLabelStyle(theme.hintColor)}>Нічиї</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{aiScores.draws}</div>
               </div>
               <div className="text-center">
-                <div>AI</div>
-                <div className="tictactoe-score-number">{aiScores.ai}</div>
+                <div style={scoreLabelStyle(theme.hintColor)}>AI</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{aiScores.ai}</div>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-3 mx-auto max-w-[320px] mt-10">
+            <div className="inline-grid grid-cols-3 gap-3 mx-auto">
               {aiBoard.map((cell, index) => (
                 <button
                   key={`ai-${index}`}
-                  className={`tictactoe-cell ${cell === 'X' ? 'x' : ''} ${cell === 'O' ? 'o' : ''}`}
+                  className="w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
                   onClick={() => handleAiMove(index)}
                   disabled={aiThinking || !!aiWinner || cell !== null}
+                  style={{
+                    backgroundColor: theme.secondaryBgColor,
+                    color: cell === 'X' ? '#667eea' : cell === 'O' ? '#764ba2' : theme.textColor,
+                    border: `2px solid ${theme.hintColor}20`,
+                  }}
                 >
                   {renderCellValue(cell)}
                 </button>
               ))}
             </div>
-            <button className="tictactoe-reset" onClick={resetAiGame}>
+            <button
+              className="mt-6 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+              style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+              onClick={resetAiGame}
+            >
               Нова гра
             </button>
           </div>
         )}
 
         {selectedMode === 'online' && (
-          <div className="tictactoe-online-box">
-            <h2 className="text-xl font-bold mb-4">🌐 Грати онлайн</h2>
+          <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+            <h2 className="text-lg font-bold mb-4" style={{ color: theme.textColor }}>🌐 Грати онлайн</h2>
             {!game && (
               <div>
-                <p className="mb-4 text-sm opacity-80">
+                <p className="mb-4 text-sm" style={{ color: theme.hintColor }}>
                   Введіть свій Telegram ID та створіть/приєднайтесь до кімнати
                 </p>
                 <input
-                  className="tictactoe-input"
+                  className="w-full rounded-xl px-3 py-2 text-sm mb-2"
                   placeholder="Ваш Telegram ID"
                   value={String(telegramId)}
                   readOnly
+                  style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
                 />
                 <input
-                  className="tictactoe-input"
+                  className="w-full rounded-xl px-3 py-2 text-sm"
                   placeholder="ID кімнати (залиште порожнім для нової)"
                   value={roomIdInput}
                   onChange={(event) => setRoomIdInput(event.target.value)}
+                  style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
                 />
-                <button className="tictactoe-primary" onClick={handleJoinRoom} disabled={loading}>
-                  {loading ? <span className="tictactoe-loading" /> : 'Створити/Приєднатись'}
+                <button
+                  className="mt-3 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+                  style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+                  onClick={handleJoinRoom}
+                  disabled={loading}
+                >
+                  {loading ? 'Підключаємо...' : 'Створити/Приєднатись'}
                 </button>
                 {error && <p className="mt-3 text-sm text-red-200">{error}</p>}
               </div>
@@ -664,29 +571,42 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
 
             {game && (
               <div>
-                <div className="bg-white/10 p-3 rounded-lg mb-4 text-center">
-                  <p className="text-sm opacity-80">ID кімнати:</p>
-                  <p className="font-mono text-lg">{game.gameId}</p>
+                <div className="p-3 rounded-lg mb-4 text-center" style={{ backgroundColor: theme.secondaryBgColor }}>
+                  <p className="text-sm" style={{ color: theme.hintColor }}>ID кімнати:</p>
+                  <p className="font-mono text-lg" style={{ color: theme.textColor }}>{game.gameId}</p>
                 </div>
-                <div className="text-center mb-4 text-sm opacity-80">
+                <div className="text-center mb-4 text-sm" style={{ color: theme.hintColor }}>
                   {onlineStatusText()}
                 </div>
-                <div className="grid grid-cols-3 gap-3 mx-auto max-w-[320px]">
+                <div className="inline-grid grid-cols-3 gap-3 mx-auto">
                   {flattenedOnlineBoard.map((cell, index) => (
                     <button
                       key={`online-${index}`}
-                      className={`tictactoe-cell ${cell === 'X' ? 'x' : ''} ${cell === 'O' ? 'o' : ''}`}
+                      className="w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
                       onClick={() => handleOnlineCellClick(index)}
                       disabled={game.status !== 'playing' || !game.isMyTurn || cell !== null}
+                      style={{
+                        backgroundColor: theme.secondaryBgColor,
+                        color: cell === 'X' ? '#667eea' : cell === 'O' ? '#764ba2' : theme.textColor,
+                        border: `2px solid ${theme.hintColor}20`,
+                      }}
                     >
                       {renderCellValue(cell)}
                     </button>
                   ))}
                 </div>
-                <button className="tictactoe-reset" onClick={resetGame}>
+                <button
+                  className="mt-6 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+                  style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
+                  onClick={resetGame}
+                >
                   Покинути кімнату
                 </button>
-                <button className="tictactoe-primary" onClick={copyInviteLink}>
+                <button
+                  className="mt-3 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+                  style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+                  onClick={copyInviteLink}
+                >
                   📋 Копіювати посилання
                 </button>
               </div>

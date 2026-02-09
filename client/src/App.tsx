@@ -34,6 +34,7 @@ function App() {
   const [showTerms, setShowTerms] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [gameMode, setGameMode] = useState<'online' | 'offline'>('online');
+  const [funZoneGame, setFunZoneGame] = useState<'tic-tac-toe' | 'perkie-catch' | 'barista-rush' | 'memory-coffee' | 'perkie-jump' | 'radio'>('tic-tac-toe');
   const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
 
@@ -267,47 +268,62 @@ function App() {
             <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
               <h2 className="text-xl font-bold mb-2">🎮 Fun Zone</h2>
               <p className="text-sm" style={{ color: theme.hintColor }}>
-                Грай онлайн з друзями або офлайн удвох на одному екрані.
+                Обирай гру або вмикай PerkUp Radio.
               </p>
-              <div className="flex gap-2 mt-4">
+              <div className="grid grid-cols-2 gap-2 mt-4">
                 {[
-                  { id: 'online', label: 'Онлайн' },
-                  { id: 'offline', label: 'Офлайн' },
-                ].map(mode => (
+                  { id: 'tic-tac-toe', label: 'Хрестики-нулики', icon: '❌⭕' },
+                  { id: 'perkie-catch', label: 'Perkie Catch', icon: '☕' },
+                  { id: 'barista-rush', label: 'Barista Rush', icon: '⚡' },
+                  { id: 'memory-coffee', label: 'Memory Coffee', icon: '🧠' },
+                  { id: 'perkie-jump', label: 'Perkie Jump', icon: '🪂' },
+                  { id: 'radio', label: 'PerkUp Radio', icon: '📻' },
+                ].map((item) => (
                   <button
-                    key={mode.id}
-                    onClick={() => setGameMode(mode.id as 'online' | 'offline')}
-                    className="flex-1 py-2 rounded-xl text-sm font-medium"
+                    key={item.id}
+                    onClick={() => setFunZoneGame(item.id as typeof funZoneGame)}
+                    className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
                     style={{
-                      backgroundColor: gameMode === mode.id ? theme.buttonColor : theme.secondaryBgColor,
-                      color: gameMode === mode.id ? theme.buttonTextColor : theme.textColor,
+                      backgroundColor: funZoneGame === item.id ? theme.buttonColor : theme.secondaryBgColor,
+                      color: funZoneGame === item.id ? theme.buttonTextColor : theme.textColor,
                     }}
                   >
-                    {mode.label}
+                    <span>{item.icon}</span>
+                    <span className="truncate">{item.label}</span>
                   </button>
                 ))}
               </div>
             </div>
 
-            {telegramUser ? (
-              <TicTacToe
-                apiUrl={API_URL}
-                telegramId={telegramUser.id}
-                firstName={telegramUser.firstName}
-                botUsername={BOT_USERNAME}
-                gameIdFromUrl={gameIdFromUrl}
-                theme={theme}
-                mode={gameMode}
-              />
-            ) : (
+            {funZoneGame === 'tic-tac-toe' && (
+              telegramUser ? (
+                <TicTacToe
+                  apiUrl={API_URL}
+                  telegramId={telegramUser.id}
+                  firstName={telegramUser.firstName}
+                  botUsername={BOT_USERNAME}
+                  gameIdFromUrl={gameIdFromUrl}
+                  theme={theme}
+                  mode={gameMode}
+                />
+              ) : (
+                <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
+                  <p className="text-sm" style={{ color: theme.hintColor }}>
+                    Потрібен Telegram акаунт, щоб запускати онлайн-ігри.
+                  </p>
+                </div>
+              )
+            )}
+
+            {funZoneGame === 'radio' && <Radio theme={theme} />}
+
+            {['perkie-catch', 'barista-rush', 'memory-coffee', 'perkie-jump'].includes(funZoneGame) && (
               <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
                 <p className="text-sm" style={{ color: theme.hintColor }}>
-                  Потрібен Telegram акаунт, щоб запускати онлайн-ігри.
+                  Ця гра ще готується. Скоро додамо! 🚀
                 </p>
               </div>
             )}
-
-            <Radio theme={theme} />
           </div>
         )}
 
@@ -358,7 +374,7 @@ function App() {
           { id: 'locations', icon: '📍', label: 'Точки' },
           { id: 'menu', icon: '☕', label: 'Меню' },
           { id: 'shop', icon: '🛒', label: 'Shop' },
-          { id: 'games', icon: '🎮', label: 'Ігри' },
+          { id: 'games', icon: '🎮', label: 'Fun Zone' },
           { id: 'bonuses', icon: '🎁', label: 'Бонуси' }
         ].map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id as TabType)} className="flex flex-col items-center p-1">
