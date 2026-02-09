@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { io, Socket } from 'socket.io-client';
 import axios from 'axios';
 
@@ -8,6 +8,7 @@ interface TicTacToeProps {
   firstName: string;
   botUsername: string;
   gameIdFromUrl?: string | null;
+  mode?: 'online' | 'offline';
   theme: {
     bgColor: string;
     textColor: string;
@@ -21,6 +22,7 @@ interface TicTacToeProps {
 type CellValue = 'X' | 'O' | null;
 type Board = CellValue[][];
 type GameStatus = 'idle' | 'waiting' | 'playing' | 'finished';
+type Mode = 'local' | 'ai' | 'online';
 
 interface GameState {
   gameId: string;
@@ -41,35 +43,77 @@ const emptyBoard: Board = [
   [null, null, null],
 ];
 
-const cellAnimationStyle = `
-@keyframes cellAppear {
-  0% { transform: scale(0) rotate(-180deg); opacity: 0; }
-  60% { transform: scale(1.2) rotate(10deg); opacity: 1; }
-  100% { transform: scale(1) rotate(0deg); opacity: 1; }
-}
-@keyframes cellPulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.1); }
-}
-@keyframes winGlow {
-  0%, 100% { box-shadow: 0 0 5px rgba(255,215,0,0.3); }
-  50% { box-shadow: 0 0 20px rgba(255,215,0,0.8); }
-}
-.cell-appear { animation: cellAppear 0.4s ease-out forwards; }
-.cell-my-turn { animation: cellPulse 1.5s ease-in-out infinite; }
-.cell-win { animation: winGlow 1s ease-in-out infinite; }
-`;
+const scoreLabelStyle = (color: string) => ({
+  color,
+});
 
-export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUsername, gameIdFromUrl, theme }: TicTacToeProps) {
+export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUsername, gameIdFromUrl, theme, mode = 'online' }: TicTacToeProps) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [game, setGame] = useState<GameState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [selectedMode, setSelectedMode] = useState<Mode>(mode === 'offline' ? 'local' : 'online');
+  const [localBoard, setLocalBoard] = useState<CellValue[]>(Array(9).fill(null));
+  const [localTurn, setLocalTurn] = useState<'X' | 'O'>('X');
+  const [localWinner, setLocalWinner] = useState<'X' | 'O' | 'draw' | null>(null);
+  const [localScores, setLocalScores] = useState({ player1: 0, player2: 0, draws: 0 });
+  const [aiBoard, setAiBoard] = useState<CellValue[]>(Array(9).fill(null));
+  const [aiWinner, setAiWinner] = useState<'X' | 'O' | 'draw' | null>(null);
+  const [aiThinking, setAiThinking] = useState(false);
+  const [aiScores, setAiScores] = useState({ player: 0, ai: 0, draws: 0 });
+  const [roomIdInput, setRoomIdInput] = useState('');
 
-  // Connect to Socket.IO
   useEffect(() => {
+    setSelectedMode(mode === 'offline' ? 'local' : 'online');
+  }, [mode]);
+
+  const flattenedOnlineBoard = useMemo(() => {
+    if (!game) return Array(9).fill(null) as CellValue[];
+    return game.board.flat();
+  }, [game]);
+
+  const checkWinner = (board: CellValue[]): 'X' | 'O' | null => {
+    const lines = [
+      [0, 1, 2],
+      [3, 4, 5],
+      [6, 7, 8],
+      [0, 3, 6],
+      [1, 4, 7],
+      [2, 5, 8],
+      [0, 4, 8],
+      [2, 4, 6],
+    ];
+
+    for (const line of lines) {
+      const [a, b, c] = line;
+      if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+        return board[a];
+      }
+    }
+
+    return null;
+  };
+
+  const isBoardFull = (board: CellValue[]) => board.every(cell => cell !== null);
+
+  const resetLocalGame = () => {
+    setLocalBoard(Array(9).fill(null));
+    setLocalTurn('X');
+    setLocalWinner(null);
+  };
+
+  const resetAiGame = () => {
+    setAiBoard(Array(9).fill(null));
+    setAiWinner(null);
+    setAiThinking(false);
+  };
+
+  // Connect to Socket.IO (online mode only)
+  useEffect(() => {
+    if (selectedMode !== 'online') return;
     const s = io(apiUrl, {
-      transports: ['websocket', 'polling'],
+      transports: ['websocket'],
+      query: { telegramId: String(telegramId) },
     });
 
     s.on('connect', () => {
@@ -77,9 +121,7 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     });
 
     s.on('game:started', () => {
-      if (game) {
-        setGame(prev => prev ? { ...prev, status: 'playing' } : null);
-      }
+      setGame(prev => prev ? { ...prev, status: 'playing' } : null);
     });
 
     s.on('game:update', (data: {
@@ -107,6 +149,26 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
       });
     });
 
+    s.on('game_over', (data: {
+      board: Board;
+      winnerId: string | null;
+      player1?: { id: string; firstName: string; telegramId: string };
+      player2?: { id: string; firstName: string; telegramId: string };
+    }) => {
+      setGame(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          board: data.board,
+          status: 'finished',
+          winnerId: data.winnerId,
+          isMyTurn: false,
+          player1Name: data.player1?.firstName || prev.player1Name,
+          player2Name: data.player2?.firstName || prev.player2Name,
+        };
+      });
+    });
+
     s.on('game:error', (data: { message: string }) => {
       setError(data.message);
       setTimeout(() => setError(null), 3000);
@@ -117,7 +179,7 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     return () => {
       s.disconnect();
     };
-  }, [apiUrl]);
+  }, [apiUrl, selectedMode, telegramId]);
 
   // Auto-join game from URL param
   useEffect(() => {
@@ -201,12 +263,95 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     }
   }, [apiUrl, telegramId, firstName, socket]);
 
+  const handleLocalMove = (index: number) => {
+    if (localWinner || localBoard[index]) return;
+    const nextBoard = [...localBoard];
+    nextBoard[index] = localTurn;
+    const winner = checkWinner(nextBoard);
+    if (winner) {
+      setLocalWinner(winner);
+      setLocalScores(prev => ({
+        ...prev,
+        player1: winner === 'X' ? prev.player1 + 1 : prev.player1,
+        player2: winner === 'O' ? prev.player2 + 1 : prev.player2,
+      }));
+    } else if (isBoardFull(nextBoard)) {
+      setLocalWinner('draw');
+      setLocalScores(prev => ({ ...prev, draws: prev.draws + 1 }));
+    } else {
+      setLocalTurn(prev => (prev === 'X' ? 'O' : 'X'));
+    }
+    setLocalBoard(nextBoard);
+  };
+
+  const evaluateMove = (board: CellValue[], index: number) => {
+    const testBoard = [...board];
+    testBoard[index] = 'O';
+    if (checkWinner(testBoard) === 'O') return 100;
+    testBoard[index] = 'X';
+    if (checkWinner(testBoard) === 'X') return 90;
+    testBoard[index] = 'O';
+    return 10;
+  };
+
+  const getAiMove = (board: CellValue[]) => {
+    const emptyCells = board.map((cell, index) => (cell === null ? index : null)).filter((val): val is number => val !== null);
+    if (!emptyCells.length) return null;
+    if (Math.random() < 0.7) {
+      const scored = emptyCells.map(index => ({ index, score: evaluateMove(board, index) }));
+      scored.sort((a, b) => b.score - a.score);
+      return scored[0].index;
+    }
+    return emptyCells[Math.floor(Math.random() * emptyCells.length)];
+  };
+
+  const handleAiMove = (index: number) => {
+    if (aiWinner || aiThinking || aiBoard[index]) return;
+    const nextBoard = [...aiBoard];
+    nextBoard[index] = 'X';
+    const winner = checkWinner(nextBoard);
+    if (winner) {
+      setAiWinner('X');
+      setAiScores(prev => ({ ...prev, player: prev.player + 1 }));
+      setAiBoard(nextBoard);
+      return;
+    }
+    if (isBoardFull(nextBoard)) {
+      setAiWinner('draw');
+      setAiScores(prev => ({ ...prev, draws: prev.draws + 1 }));
+      setAiBoard(nextBoard);
+      return;
+    }
+
+    setAiThinking(true);
+    setAiBoard(nextBoard);
+    setTimeout(() => {
+      const aiMove = getAiMove(nextBoard);
+      if (aiMove === null) {
+        setAiThinking(false);
+        return;
+      }
+      const boardAfterAi = [...nextBoard];
+      boardAfterAi[aiMove] = 'O';
+      const aiWinnerResult = checkWinner(boardAfterAi);
+      if (aiWinnerResult) {
+        setAiWinner('O');
+        setAiScores(prev => ({ ...prev, ai: prev.ai + 1 }));
+      } else if (isBoardFull(boardAfterAi)) {
+        setAiWinner('draw');
+        setAiScores(prev => ({ ...prev, draws: prev.draws + 1 }));
+      }
+      setAiBoard(boardAfterAi);
+      setAiThinking(false);
+    }, 600);
+  };
+
   const makeMove = useCallback((row: number, col: number) => {
     if (!game || !socket) return;
     if (!game.isMyTurn || game.status !== 'playing') return;
     if (game.board[row][col] !== null) return;
 
-    socket.emit('game:move', {
+    socket.emit('make_move', {
       gameId: game.gameId,
       playerId: game.playerId,
       row,
@@ -217,6 +362,7 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
   const resetGame = useCallback(() => {
     setGame(null);
     setError(null);
+    setRoomIdInput('');
   }, []);
 
   const copyInviteLink = useCallback(() => {
@@ -224,134 +370,250 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     navigator.clipboard.writeText(game.inviteLink).catch(() => {});
   }, [game]);
 
-  // Idle state - show create/join buttons
-  if (!game) {
-    return (
-      <div className="text-center">
-        <div className="text-4xl mb-4">🎮</div>
-        <h3 className="text-lg font-semibold mb-2" style={{ color: theme.textColor }}>
-          Хрестики-нулики
-        </h3>
-        <p className="text-sm mb-6" style={{ color: theme.hintColor }}>
-          Грай з друзями онлайн!
-        </p>
+  const renderCellValue = (value: CellValue) => value ?? '';
 
-        <button
-          onClick={createGame}
-          disabled={loading}
-          className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98] disabled:opacity-60 mb-3"
-          style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
-        >
-          {loading ? 'Створення...' : 'Створити гру'}
-        </button>
-
-        {error && (
-          <p className="text-sm mt-2" style={{ color: '#ef4444' }}>{error}</p>
-        )}
-      </div>
-    );
-  }
-
-  // Waiting for opponent
-  if (game.status === 'waiting') {
-    return (
-      <div className="text-center">
-        <div className="text-4xl mb-4">⏳</div>
-        <h3 className="text-lg font-semibold mb-2" style={{ color: theme.textColor }}>
-          Очікування суперника...
-        </h3>
-        <p className="text-sm mb-4" style={{ color: theme.hintColor }}>
-          Надішли посилання другу, щоб він приєднався!
-        </p>
-
-        <div className="p-3 rounded-xl mb-4 text-xs break-all" style={{ backgroundColor: theme.secondaryBgColor, color: theme.hintColor }}>
-          {game.inviteLink}
-        </div>
-
-        <button
-          onClick={copyInviteLink}
-          className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98] mb-3"
-          style={{ backgroundColor: '#2196F3', color: '#ffffff' }}
-        >
-          📋 Копіювати посилання
-        </button>
-
-        <button
-          onClick={resetGame}
-          className="text-sm underline"
-          style={{ color: theme.hintColor }}
-        >
-          Скасувати
-        </button>
-      </div>
-    );
-  }
-
-  // Game board
-  const getStatusText = () => {
-    if (game.status === 'finished') {
-      if (!game.winnerId) return '🤝 Нічия!';
-      const isWinner = game.winnerId === game.playerId;
-      return isWinner ? '🎉 Ти переміг!' : '😔 Ти програв';
+  const getLocalStatus = () => {
+    if (localWinner) {
+      if (localWinner === 'draw') return 'Нічия! 🤝';
+      return `${localWinner === 'X' ? 'Гравець 1' : 'Гравець 2'} перемагає! 🎉`;
     }
-    return game.isMyTurn ? '🟢 Твій хід' : '🔴 Хід суперника';
+    return `${localTurn === 'X' ? 'Гравець 1' : 'Гравець 2'} (${localTurn}) ходить`;
   };
 
-  const mySymbol = game.isPlayerX ? 'X' : 'O';
+  const getAiStatus = () => {
+    if (aiWinner) {
+      if (aiWinner === 'draw') return 'Нічия! 🤝';
+      return aiWinner === 'X' ? 'Ти перемагаєш! 🎉' : 'AI перемагає! 🤖';
+    }
+    if (aiThinking) return 'AI думає...';
+    return 'Твій хід (X)';
+  };
+
+  const onlineStatusText = () => {
+    if (!game) return 'Введіть свій Telegram ID та створіть/приєднайтесь до кімнати';
+    if (game.status === 'waiting') return 'Чекаємо на суперника...';
+    if (game.status === 'finished') return game.winnerId ? 'Гра закінчена! Є переможець.' : 'Гра закінчена! Нічия!';
+    return game.isMyTurn ? 'Твій хід!' : 'Хід суперника...';
+  };
+
+  const handleOnlineCellClick = (index: number) => {
+    if (!game || game.status !== 'playing') return;
+    if (!game.isMyTurn) return;
+    const row = Math.floor(index / 3);
+    const col = index % 3;
+    makeMove(row, col);
+  };
+
+  const handleJoinRoom = async () => {
+    if (!roomIdInput.trim()) {
+      await createGame();
+      return;
+    }
+    await joinGame(roomIdInput.trim());
+  };
 
   return (
-    <div className="text-center">
-      <style>{cellAnimationStyle}</style>
-      <div className="flex justify-between items-center mb-4">
-        <div className="text-sm" style={{ color: theme.textColor }}>
-          <span className="font-bold">{game.player1Name || 'Гравець 1'}</span>
-          <span className="ml-1" style={{ color: theme.hintColor }}>(X)</span>
-        </div>
-        <span style={{ color: theme.hintColor }}>vs</span>
-        <div className="text-sm" style={{ color: theme.textColor }}>
-          <span className="font-bold">{game.player2Name || 'Гравець 2'}</span>
-          <span className="ml-1" style={{ color: theme.hintColor }}>(O)</span>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <header className="text-center">
+        <h1 className="text-2xl font-bold mb-2" style={{ color: theme.textColor }}>Хрестики-Нулики</h1>
+        <p className="text-sm" style={{ color: theme.hintColor }}>Виберіть режим гри</p>
+      </header>
 
-      <p className="text-sm font-medium mb-4" style={{ color: theme.textColor }}>
-        {getStatusText()} {game.status === 'playing' && `(Ти — ${mySymbol})`}
-      </p>
-
-      {/* Board */}
-      <div className="inline-grid grid-cols-3 gap-2 mb-4">
-        {game.board.map((row, ri) =>
-          row.map((cell, ci) => (
+      <main className="space-y-6">
+        <div className="flex gap-3 justify-center flex-wrap">
+          {([
+            { id: 'local', label: '🎮 Локально (2 гравців)' },
+            { id: 'ai', label: '🤖 проти AI' },
+            { id: 'online', label: '🌐 Онлайн' },
+          ] as const).map((entry) => (
             <button
-              key={`${ri}-${ci}`}
-              onClick={() => makeMove(ri, ci)}
-              disabled={!!cell || !game.isMyTurn || game.status !== 'playing'}
-              className={`w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default ${cell ? 'cell-appear' : ''} ${!cell && game.isMyTurn && game.status === 'playing' ? 'cell-my-turn' : ''} ${game.status === 'finished' && game.winnerId === game.playerId ? 'cell-win' : ''}`}
+              key={entry.id}
+              onClick={() => setSelectedMode(entry.id)}
+              className="px-4 py-2 rounded-xl text-sm font-medium transition-all"
               style={{
-                backgroundColor: cell ? (cell === 'X' ? '#EF444415' : '#3B82F615') : theme.bgColor,
-                color: cell === 'X' ? '#EF4444' : cell === 'O' ? '#3B82F6' : theme.hintColor,
-                border: `2px solid ${theme.hintColor}20`,
+                backgroundColor: selectedMode === entry.id ? theme.buttonColor : theme.secondaryBgColor,
+                color: selectedMode === entry.id ? theme.buttonTextColor : theme.textColor,
               }}
             >
-              {cell || ''}
+              {entry.label}
             </button>
-          ))
+          ))}
+        </div>
+
+        {selectedMode === 'local' && (
+          <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+            <div className="text-center mb-4 text-sm font-medium" style={{ color: theme.textColor }}>
+              {getLocalStatus()}
+            </div>
+
+            <div className="flex justify-center gap-8 mb-6">
+              <div className="text-center">
+                <div style={scoreLabelStyle(theme.hintColor)}>Гравець 1</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{localScores.player1}</div>
+              </div>
+              <div className="text-center">
+                <div style={scoreLabelStyle(theme.hintColor)}>Нічиї</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{localScores.draws}</div>
+              </div>
+              <div className="text-center">
+                <div style={scoreLabelStyle(theme.hintColor)}>Гравець 2</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{localScores.player2}</div>
+              </div>
+            </div>
+
+            <div className="inline-grid grid-cols-3 gap-3 mx-auto">
+              {localBoard.map((cell, index) => (
+                <button
+                  key={`local-${index}`}
+                  className="w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
+                  onClick={() => handleLocalMove(index)}
+                  disabled={!!localWinner || cell !== null}
+                  style={{
+                    backgroundColor: theme.secondaryBgColor,
+                    color: cell === 'X' ? '#667eea' : cell === 'O' ? '#764ba2' : theme.textColor,
+                    border: `2px solid ${theme.hintColor}20`,
+                  }}
+                >
+                  {renderCellValue(cell)}
+                </button>
+              ))}
+            </div>
+
+            <button
+              className="mt-6 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+              style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+              onClick={resetLocalGame}
+            >
+              Нова гра
+            </button>
+          </div>
         )}
-      </div>
 
-      {game.status === 'finished' && (
-        <button
-          onClick={resetGame}
-          className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98]"
-          style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
-        >
-          Нова гра
-        </button>
-      )}
+        {selectedMode === 'ai' && (
+          <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+            <div className="text-center mb-4 text-sm font-medium" style={{ color: theme.textColor }}>
+              {getAiStatus()}
+            </div>
+            <div className="flex justify-center gap-8 mb-6">
+              <div className="text-center">
+                <div style={scoreLabelStyle(theme.hintColor)}>Ти</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{aiScores.player}</div>
+              </div>
+              <div className="text-center">
+                <div style={scoreLabelStyle(theme.hintColor)}>Нічиї</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{aiScores.draws}</div>
+              </div>
+              <div className="text-center">
+                <div style={scoreLabelStyle(theme.hintColor)}>AI</div>
+                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{aiScores.ai}</div>
+              </div>
+            </div>
+            <div className="inline-grid grid-cols-3 gap-3 mx-auto">
+              {aiBoard.map((cell, index) => (
+                <button
+                  key={`ai-${index}`}
+                  className="w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
+                  onClick={() => handleAiMove(index)}
+                  disabled={aiThinking || !!aiWinner || cell !== null}
+                  style={{
+                    backgroundColor: theme.secondaryBgColor,
+                    color: cell === 'X' ? '#667eea' : cell === 'O' ? '#764ba2' : theme.textColor,
+                    border: `2px solid ${theme.hintColor}20`,
+                  }}
+                >
+                  {renderCellValue(cell)}
+                </button>
+              ))}
+            </div>
+            <button
+              className="mt-6 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+              style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+              onClick={resetAiGame}
+            >
+              Нова гра
+            </button>
+          </div>
+        )}
 
-      {error && (
-        <p className="text-sm mt-2" style={{ color: '#ef4444' }}>{error}</p>
-      )}
+        {selectedMode === 'online' && (
+          <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+            <h2 className="text-lg font-bold mb-4" style={{ color: theme.textColor }}>🌐 Грати онлайн</h2>
+            {!game && (
+              <div>
+                <p className="mb-4 text-sm" style={{ color: theme.hintColor }}>
+                  Введіть свій Telegram ID та створіть/приєднайтесь до кімнати
+                </p>
+                <input
+                  className="w-full rounded-xl px-3 py-2 text-sm mb-2"
+                  placeholder="Ваш Telegram ID"
+                  value={String(telegramId)}
+                  readOnly
+                  style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
+                />
+                <input
+                  className="w-full rounded-xl px-3 py-2 text-sm"
+                  placeholder="ID кімнати (залиште порожнім для нової)"
+                  value={roomIdInput}
+                  onChange={(event) => setRoomIdInput(event.target.value)}
+                  style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
+                />
+                <button
+                  className="mt-3 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+                  style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+                  onClick={handleJoinRoom}
+                  disabled={loading}
+                >
+                  {loading ? 'Підключаємо...' : 'Створити/Приєднатись'}
+                </button>
+                {error && <p className="mt-3 text-sm text-red-200">{error}</p>}
+              </div>
+            )}
+
+            {game && (
+              <div>
+                <div className="p-3 rounded-lg mb-4 text-center" style={{ backgroundColor: theme.secondaryBgColor }}>
+                  <p className="text-sm" style={{ color: theme.hintColor }}>ID кімнати:</p>
+                  <p className="font-mono text-lg" style={{ color: theme.textColor }}>{game.gameId}</p>
+                </div>
+                <div className="text-center mb-4 text-sm" style={{ color: theme.hintColor }}>
+                  {onlineStatusText()}
+                </div>
+                <div className="inline-grid grid-cols-3 gap-3 mx-auto">
+                  {flattenedOnlineBoard.map((cell, index) => (
+                    <button
+                      key={`online-${index}`}
+                      className="w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
+                      onClick={() => handleOnlineCellClick(index)}
+                      disabled={game.status !== 'playing' || !game.isMyTurn || cell !== null}
+                      style={{
+                        backgroundColor: theme.secondaryBgColor,
+                        color: cell === 'X' ? '#667eea' : cell === 'O' ? '#764ba2' : theme.textColor,
+                        border: `2px solid ${theme.hintColor}20`,
+                      }}
+                    >
+                      {renderCellValue(cell)}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  className="mt-6 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+                  style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
+                  onClick={resetGame}
+                >
+                  Покинути кімнату
+                </button>
+                <button
+                  className="mt-3 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+                  style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+                  onClick={copyInviteLink}
+                >
+                  📋 Копіювати посилання
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
     </div>
   );
 }

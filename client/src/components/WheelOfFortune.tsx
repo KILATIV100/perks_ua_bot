@@ -4,6 +4,7 @@ import WebApp from '@twa-dev/sdk';
 interface WheelOfFortuneProps {
   onSpin: (lat?: number, lng?: number) => Promise<{ reward: number; newBalance: number } | { error: string; message: string } | null>;
   canSpin: boolean;
+  nextSpinAt?: string | null;
   theme: {
     bgColor: string;
     textColor: string;
@@ -32,7 +33,7 @@ const SEGMENTS = [
   { value: 10, color: '#FFA500', label: '10' },
 ];
 
-export function WheelOfFortune({ onSpin, canSpin, theme }: WheelOfFortuneProps) {
+export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFortuneProps) {
   const [isSpinning, setIsSpinning] = useState(false);
   const [rotation, setRotation] = useState(0);
   const [result, setResult] = useState<number | null>(null);
@@ -252,6 +253,11 @@ export function WheelOfFortune({ onSpin, canSpin, theme }: WheelOfFortuneProps) 
       {!canSpin && !isSpinning && (
         <p className="mt-4 text-center" style={{ color: theme.hintColor }}>
           🎡 Ви вже крутили колесо сьогодні. Спробуйте завтра!
+          {nextSpinAt && (
+            <span className="block mt-1 text-xs">
+              Наступний спін після {new Date(nextSpinAt).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
         </p>
       )}
 
