@@ -14,6 +14,11 @@ const joinGameSchema = z.object({
   gameId: z.string().uuid(),
 });
 
+const perkyJumpSchema = z.object({
+  telegramId: z.union([z.number(), z.string()]).transform(String),
+  beansCollected: z.number().int().nonnegative(),
+});
+
 export async function gameRoutes(
   app: FastifyInstance,
   _opts: FastifyPluginOptions
@@ -34,14 +39,14 @@ export async function gameRoutes(
       const game = await app.prisma.gameSession.create({
         data: {
           player1Id: user.id,
-          gameType: 'TIC_TAC_TOE',
+          type: 'TIC_TAC_TOE',
           boardState: [[null, null, null], [null, null, null], [null, null, null]],
           status: 'WAITING',
         },
         select: {
           id: true,
           status: true,
-          gameType: true,
+          type: true,
           createdAt: true,
         },
       });
@@ -102,7 +107,7 @@ export async function gameRoutes(
           player2Id: true,
           status: true,
           boardState: true,
-          gameType: true,
+          type: true,
         },
       });
 
@@ -140,6 +145,39 @@ export async function gameRoutes(
     } catch (error) {
       app.log.error({ err: error }, 'Get game error');
       return reply.status(500).send({ error: 'Failed to get game' });
+    }
+  });
+
+  // POST /api/games/perkie-jump/save - Save Perky Jump results
+  app.post('perkie-jump/save', async (request, reply) => {
+    try {
+      const body = perkyJumpSchema.parse(request.body);
+      const user = await app.prisma.user.findUnique({
+        where: { telegramId: body.telegramId },
+      });
+
+      if (!user) {
+        return reply.status(404).send({ error: 'User not found' });
+      }
+
+      const reward = Math.min(Math.floor(body.beansCollected / 100), 5);
+
+      if (reward > 0) {
+        await app.prisma.user.update({
+          where: { telegramId: body.telegramId },
+          data: {
+            points: { increment: reward },
+          },
+        });
+      }
+
+      return reply.send({ success: true, pointsAdded: reward });
+    } catch (error) {
+      app.log.error({ err: error }, 'Perky Jump save error');
+      if (error instanceof z.ZodError) {
+        return reply.status(400).send({ error: 'Invalid request data', details: error.errors });
+      }
+      return reply.status(500).send({ error: 'Failed to save Perky Jump result' });
     }
   });
 }
@@ -187,7 +225,7 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
     });
 
     // Handle a move
-    socket.on('game:move', async (data: { gameId: string; playerId: string; row: number; col: number }) => {
+    const handleMove = async (data: { gameId: string; playerId: string; row: number; col: number }) => {
       try {
         const game = await prisma.gameSession.findUnique({
           where: { id: data.gameId },
@@ -297,11 +335,23 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
           player1: updatedGame.player1,
           player2: updatedGame.player2,
         });
+
+        if (status === 'FINISHED') {
+          io.to(`game:${data.gameId}`).emit('game_over', {
+            board,
+            winnerId,
+            player1: updatedGame.player1,
+            player2: updatedGame.player2,
+          });
+        }
       } catch (error) {
         console.error('[Socket.IO] Move error:', error);
         socket.emit('game:error', { message: 'Server error processing move' });
       }
-    });
+    };
+
+    socket.on('game:move', handleMove);
+    socket.on('make_move', handleMove);
 
     socket.on('disconnect', () => {
       console.log(`[Socket.IO] Client disconnected: ${socket.id}`);
