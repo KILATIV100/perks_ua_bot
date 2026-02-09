@@ -25,22 +25,37 @@ const PICKUP_TIMES = [5, 10, 15, 20];
 export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, theme, onClose, onSuccess }: CheckoutProps) {
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'telegram_pay'>('cash');
   const [pickupMinutes, setPickupMinutes] = useState(10);
+  const [shippingAddress, setShippingAddress] = useState('');
+  const [shippingPhone, setShippingPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const total = cart.reduce((sum, item) => sum + parseFloat(item.product.price) * item.quantity, 0);
+  const isShippingOrder = cart.some(item => item.product.type === 'MERCH' || item.product.type === 'BEANS');
 
   const handleSubmit = async () => {
     if (submitting) return;
-    setSubmitting(true);
     setError(null);
 
+    if (isShippingOrder) {
+      if (!shippingAddress.trim() || !shippingPhone.trim()) {
+        setError("Будь ласка, заповніть адресу та телефон для доставки.");
+        return;
+      }
+    }
+
+    setSubmitting(true);
+
     try {
+
       await axios.post(`${apiUrl}/api/orders`, {
         telegramId: String(telegramId),
         locationId,
         paymentMethod,
-        pickupMinutes,
+        pickupMinutes: isShippingOrder ? undefined : pickupMinutes,
+        deliveryType: isShippingOrder ? 'shipping' : 'pickup',
+        shippingAddr: isShippingOrder ? shippingAddress.trim() : undefined,
+        phone: isShippingOrder ? shippingPhone.trim() : undefined,
         items: cart.map(item => ({
           productId: item.product.id,
           name: item.product.name,
@@ -109,25 +124,47 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
           </div>
         </div>
 
-        {/* Pickup time */}
-        <div className="mb-4">
-          <p className="text-xs mb-2 font-medium" style={{ color: theme.hintColor }}>Час готовності</p>
-          <div className="grid grid-cols-4 gap-2">
-            {PICKUP_TIMES.map(time => (
-              <button
-                key={time}
-                onClick={() => setPickupMinutes(time)}
-                className="py-2.5 rounded-xl text-sm font-medium transition-all"
-                style={{
-                  backgroundColor: pickupMinutes === time ? theme.buttonColor : theme.secondaryBgColor,
-                  color: pickupMinutes === time ? theme.buttonTextColor : theme.textColor,
-                }}
-              >
-                {time} хв
-              </button>
-            ))}
+        {/* Pickup time or shipping info */}
+        {!isShippingOrder ? (
+          <div className="mb-4">
+            <p className="text-xs mb-2 font-medium" style={{ color: theme.hintColor }}>Час готовності</p>
+            <div className="grid grid-cols-4 gap-2">
+              {PICKUP_TIMES.map(time => (
+                <button
+                  key={time}
+                  onClick={() => setPickupMinutes(time)}
+                  className="py-2.5 rounded-xl text-sm font-medium transition-all"
+                  style={{
+                    backgroundColor: pickupMinutes === time ? theme.buttonColor : theme.secondaryBgColor,
+                    color: pickupMinutes === time ? theme.buttonTextColor : theme.textColor,
+                  }}
+                >
+                  {time} хв
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="mb-4 space-y-3">
+            <p className="text-xs font-medium" style={{ color: theme.hintColor }}>
+              Доставка (Нова Пошта)
+            </p>
+            <input
+              value={shippingAddress}
+              onChange={(event) => setShippingAddress(event.target.value)}
+              placeholder="Місто та відділення/поштомат"
+              className="w-full rounded-xl px-3 py-2 text-sm"
+              style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
+            />
+            <input
+              value={shippingPhone}
+              onChange={(event) => setShippingPhone(event.target.value)}
+              placeholder="Телефон для зв'язку"
+              className="w-full rounded-xl px-3 py-2 text-sm"
+              style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
+            />
+          </div>
+        )}
 
         {/* Payment method */}
         <div className="mb-6">
