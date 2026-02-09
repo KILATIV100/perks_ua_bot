@@ -3,12 +3,23 @@ import axios from 'axios';
 import WebApp from '@twa-dev/sdk';
 import { WheelOfFortune } from './components/WheelOfFortune';
 import { Menu, CartItem } from './components/Menu';
+import { Radio } from './components/Radio';
+import { TicTacToe } from './components/TicTacToe';
 import { Checkout } from './components/Checkout';
 
 type TabType = 'locations' | 'menu' | 'shop' | 'games' | 'bonuses';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://backend-production-5ee9.up.railway.app';
+const resolveApiUrl = () => {
+  const params = new URLSearchParams(window.location.search);
+  const paramUrl = params.get('api');
+  const windowUrl = (window as unknown as { __PERKUP_API_URL?: string }).__PERKUP_API_URL;
+  const rawUrl = paramUrl || windowUrl || import.meta.env.VITE_API_URL || 'https://backend-production-5ee9.up.railway.app';
+  return rawUrl.replace(/\/+$/, '');
+};
+
+const API_URL = resolveApiUrl();
 const BOT_USERNAME = 'perkup_ua_bot';
+const KYIV_TIME_ZONE = 'Europe/Kyiv';
 
 const api = axios.create({ baseURL: API_URL });
 
@@ -22,6 +33,8 @@ function App() {
   const [nextSpinAt, setNextSpinAt] = useState<string | null>(null);
   const [showTerms, setShowTerms] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [gameMode, setGameMode] = useState<'online' | 'offline'>('online');
+  const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
 
   const theme = useMemo(() => {
@@ -39,15 +52,41 @@ function App() {
   const telegramUser = useMemo(() => {
     const user = WebApp.initDataUnsafe?.user;
     if (user) return { id: user.id, firstName: user.first_name, username: user.username };
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('telegramId');
+    if (id) {
+      return {
+        id: Number(id),
+        firstName: params.get('firstName') || 'Guest',
+        username: params.get('username') || undefined,
+      };
+    }
     return null;
   }, []);
+
+  const startParam = useMemo(() => WebApp.initDataUnsafe?.start_param, []);
+  const referralId = useMemo(() => {
+    if (startParam?.startsWith('ref_')) {
+      return startParam.replace('ref_', '');
+    }
+    return null;
+  }, [startParam]);
+  const gameIdFromUrl = useMemo(() => {
+    if (startParam?.startsWith('game_')) {
+      return startParam.replace('game_', '');
+    }
+    return null;
+  }, [startParam]);
 
   useEffect(() => {
     WebApp.ready();
     WebApp.expand();
+    if (!telegramUser) {
+      setLoading(false);
+    }
     syncUser();
     fetchLocations();
-  }, []);
+  }, [telegramUser]);
 
   const syncUser = async () => {
     if (!telegramUser) return;
@@ -56,6 +95,7 @@ function App() {
         telegramId: String(telegramUser.id),
         username: telegramUser.username,
         firstName: telegramUser.firstName,
+        referrerId: referralId || undefined,
       });
       setAppUser(data.user);
       checkSpinAvailability(data.user.lastSpinDate);
@@ -66,13 +106,40 @@ function App() {
     }
   };
 
+  const getKyivDateString = (date = new Date()) =>
+    date.toLocaleDateString('en-CA', { timeZone: KYIV_TIME_ZONE });
+
+  const getNextKyivMidnight = () => {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: KYIV_TIME_ZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const parts = formatter.formatToParts(new Date());
+    const year = Number(parts.find(part => part.type === 'year')?.value);
+    const month = Number(parts.find(part => part.type === 'month')?.value);
+    const day = Number(parts.find(part => part.type === 'day')?.value);
+    const offsetFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: KYIV_TIME_ZONE,
+      timeZoneName: 'shortOffset',
+      hour: '2-digit',
+    });
+    const nextDayAnchor = new Date(Date.UTC(year, month - 1, day + 1, 12, 0, 0));
+    const offsetValue = offsetFormatter.formatToParts(nextDayAnchor).find(part => part.type === 'timeZoneName')?.value || 'GMT+0';
+    const match = offsetValue.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
+    const offsetHours = match ? Number(match[1]) : 0;
+    const offsetMinutes = match && match[2] ? Number(match[2]) : 0;
+    const totalOffsetMinutes = offsetHours * 60 + Math.sign(offsetHours) * offsetMinutes;
+    const utcMillis = Date.UTC(year, month - 1, day + 1, 0, 0, 0) - totalOffsetMinutes * 60 * 1000;
+    return new Date(utcMillis);
+  };
+
   const checkSpinAvailability = (lastSpinDate: string | null) => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getKyivDateString();
     if (lastSpinDate === today) {
       setCanSpin(false);
-      const tomorrow = new Date();
-      tomorrow.setHours(24, 0, 0, 0);
-      setNextSpinAt(tomorrow.toISOString());
+      setNextSpinAt(getNextKyivMidnight().toISOString());
     } else {
       setCanSpin(true);
     }
@@ -82,6 +149,42 @@ function App() {
     const { data } = await api.get('/api/locations');
     setLocations(data.locations);
   };
+
+  const handleSpin = useCallback(async (lat?: number, lng?: number) => {
+    if (!telegramUser) return null;
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const devMode = urlParams.get('dev') === 'true' || urlParams.get('admin') === 'true';
+      const { data } = await api.post('/api/user/spin', {
+        telegramId: String(telegramUser.id),
+        userLat: lat,
+        userLng: lng,
+        devMode,
+      });
+
+      setAppUser((prev: any) => ({ ...prev, points: data.newBalance, totalSpins: (prev?.totalSpins || 0) + 1 }));
+      setCanSpin(false);
+      setNextSpinAt(data.nextSpinAt || null);
+
+      return { reward: data.reward, newBalance: data.newBalance };
+    } catch (err: any) {
+      const message = err?.response?.data?.message || 'Не вдалося крутнути колесо';
+      return { error: err?.response?.data?.error || 'SpinError', message };
+    }
+  }, [telegramUser]);
+
+  const referralLink = useMemo(() => {
+    if (!telegramUser) return '';
+    return `https://t.me/${BOT_USERNAME}?start=ref_${telegramUser.id}`;
+  }, [telegramUser]);
+
+  const copyReferralLink = useCallback(() => {
+    if (!referralLink) return;
+    navigator.clipboard.writeText(referralLink).then(() => {
+      setReferralCopied(true);
+      setTimeout(() => setReferralCopied(false), 2000);
+    }).catch(() => {});
+  }, [referralLink]);
 
   if (loading) return <div className="p-20 text-center">Завантаження...</div>;
 
@@ -110,37 +213,126 @@ function App() {
         )}
 
         {(activeTab === 'menu' || activeTab === 'shop') && (
-          <Menu 
-            apiUrl={API_URL} 
-            cart={cart} 
-            onCartChange={setCart} 
-            theme={theme} 
-            canPreorder={activeTab === 'menu' ? selectedLocation?.canPreorder : true}
-            filterType={activeTab === 'menu' ? 'MENU' : 'SHOP'} 
-          />
+          <>
+            {(() => {
+              const orderLocation = activeTab === 'menu' ? selectedLocation : (selectedLocation || locations[0]);
+              const totalAmount = cart.reduce((sum, item) => sum + parseFloat(item.product.price) * item.quantity, 0);
+              return (
+                <>
+            <Menu
+              apiUrl={API_URL}
+              cart={cart}
+              onCartChange={setCart}
+              theme={theme}
+              canPreorder={activeTab === 'menu' ? selectedLocation?.canPreorder : true}
+              locationName={selectedLocation?.name}
+              mode={activeTab === 'menu' ? 'menu' : 'shop'}
+            />
+
+            {cart.length > 0 && orderLocation && telegramUser && (
+              <div className="fixed bottom-20 left-0 right-0 z-20 px-4">
+                <button
+                  onClick={() => setShowCheckout(true)}
+                  className="w-full py-4 rounded-2xl font-bold text-base shadow-lg transition-all active:scale-[0.98]"
+                  style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+                >
+                  Оформити замовлення — {totalAmount} грн
+                </button>
+              </div>
+            )}
+
+            {showCheckout && orderLocation && telegramUser && (
+              <Checkout
+                apiUrl={API_URL}
+                cart={cart}
+                telegramId={telegramUser.id}
+                locationId={orderLocation.id}
+                locationName={orderLocation.name}
+                theme={theme}
+                onClose={() => setShowCheckout(false)}
+                onSuccess={() => {
+                  setShowCheckout(false);
+                  setCart([]);
+                }}
+              />
+            )}
+                </>
+              );
+            })()}
+          </>
         )}
 
         {activeTab === 'games' && (
-          <div className="text-center p-10">
-            <h2 className="text-xl font-bold mb-4">Fun Zone</h2>
-            <div className="bg-white p-6 rounded-2xl shadow-md mb-4">
-              <p>🕹 Ігри з Перкі (Tic-Tac-Toe)</p>
-              <button className="mt-4 px-6 py-2 rounded-xl text-white" style={{ backgroundColor: theme.buttonColor }}>Грати з другом</button>
+          <div className="space-y-6">
+            <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+              <h2 className="text-xl font-bold mb-2">🎮 Fun Zone</h2>
+              <p className="text-sm" style={{ color: theme.hintColor }}>
+                Грай онлайн з друзями або офлайн удвох на одному екрані.
+              </p>
+              <div className="flex gap-2 mt-4">
+                {[
+                  { id: 'online', label: 'Онлайн' },
+                  { id: 'offline', label: 'Офлайн' },
+                ].map(mode => (
+                  <button
+                    key={mode.id}
+                    onClick={() => setGameMode(mode.id as 'online' | 'offline')}
+                    className="flex-1 py-2 rounded-xl text-sm font-medium"
+                    style={{
+                      backgroundColor: gameMode === mode.id ? theme.buttonColor : theme.secondaryBgColor,
+                      color: gameMode === mode.id ? theme.buttonTextColor : theme.textColor,
+                    }}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="bg-white p-6 rounded-2xl shadow-md">
-              <p>📻 PerkUp Radio</p>
-              <audio controls className="w-full mt-4">
-                <source src="https://icecast.skyrock.net/s/natio_mp3_128k" type="audio/mpeg" />
-              </audio>
-            </div>
+
+            {telegramUser ? (
+              <TicTacToe
+                apiUrl={API_URL}
+                telegramId={telegramUser.id}
+                firstName={telegramUser.firstName}
+                botUsername={BOT_USERNAME}
+                gameIdFromUrl={gameIdFromUrl}
+                theme={theme}
+                mode={gameMode}
+              />
+            ) : (
+              <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
+                <p className="text-sm" style={{ color: theme.hintColor }}>
+                  Потрібен Telegram акаунт, щоб запускати онлайн-ігри.
+                </p>
+              </div>
+            )}
+
+            <Radio theme={theme} />
           </div>
         )}
 
         {activeTab === 'bonuses' && (
           <div className="space-y-6">
-            <WheelOfFortune onSpin={() => syncUser()} canSpin={canSpin} nextSpinAt={nextSpinAt} theme={theme} />
+            <WheelOfFortune onSpin={handleSpin} canSpin={canSpin} nextSpinAt={nextSpinAt} theme={theme} />
+            <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+              <h3 className="font-semibold mb-2">🤝 Рефералка</h3>
+              <p className="text-sm mb-3" style={{ color: theme.hintColor }}>
+                Запроси друга й отримай +10 балів після його першого спіну. Новий користувач отримає +5 балів.
+              </p>
+              <div className="text-xs break-all p-3 rounded-xl mb-3" style={{ backgroundColor: theme.secondaryBgColor, color: theme.hintColor }}>
+                {referralLink || 'Посилання недоступне'}
+              </div>
+              <button
+                onClick={copyReferralLink}
+                className="w-full py-2 rounded-xl text-sm font-medium"
+                style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+                disabled={!referralLink}
+              >
+                {referralCopied ? '✅ Скопійовано' : '📋 Копіювати посилання'}
+              </button>
+            </div>
             <div className="text-center">
-               <button onClick={() => setShowTerms(true)} className="text-sm underline" style={{ color: theme.hintColor }}>Умови використання</button>
+              <button onClick={() => setShowTerms(true)} className="text-sm underline" style={{ color: theme.hintColor }}>Умови використання</button>
             </div>
           </div>
         )}
@@ -152,7 +344,7 @@ function App() {
             <h2 className="text-lg font-bold mb-4">📜 Умови використання</h2>
             <div className="space-y-3 text-sm">
               <p>1. Акція діє в усіх кав'ярнях PerkUp.</p>
-              <p>2. 100 накопичених балів можна обміняти на будь-який напій до 100 грн.</p>
+              <p>2. 100 накопичених балів можна обміняти на будь-який напій.</p>
               <p>3. Код на отримання напою дійсний протягом 15 хвилин після активації.</p>
               <p>4. Бали не підлягають обміну на грошовий еквівалент.</p>
             </div>
