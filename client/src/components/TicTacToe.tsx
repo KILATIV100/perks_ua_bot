@@ -1,13 +1,6 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { io, Socket } from 'socket.io-client';
-import axios from 'axios';
+import { useState, useEffect } from 'react';
 
 interface TicTacToeProps {
-  apiUrl: string;
-  telegramId: number;
-  firstName: string;
-  botUsername: string;
-  gameIdFromUrl?: string | null;
   mode?: 'online' | 'offline';
   theme: {
     bgColor: string;
@@ -20,40 +13,14 @@ interface TicTacToeProps {
 }
 
 type CellValue = 'X' | 'O' | null;
-type Board = CellValue[][];
-type GameStatus = 'idle' | 'waiting' | 'playing' | 'finished';
-type Mode = 'local' | 'ai' | 'online';
-
-interface GameState {
-  gameId: string;
-  board: Board;
-  status: GameStatus;
-  playerId: string;
-  isPlayerX: boolean;
-  isMyTurn: boolean;
-  winnerId: string | null;
-  player1Name: string;
-  player2Name: string;
-  inviteLink: string;
-}
-
-const emptyBoard: Board = [
-  [null, null, null],
-  [null, null, null],
-  [null, null, null],
-];
+type Mode = 'local' | 'ai';
 
 const scoreLabelStyle = (color: string) => ({
   color,
 });
 
-export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUsername, gameIdFromUrl, theme, mode = 'online' }: TicTacToeProps) {
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [socketConnected, setSocketConnected] = useState(false);
-  const [game, setGame] = useState<GameState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [selectedMode, setSelectedMode] = useState<Mode>(mode === 'offline' ? 'local' : 'online');
+export function TicTacToe({ theme, mode = 'online' }: TicTacToeProps) {
+  const [selectedMode, setSelectedMode] = useState<Mode>('local');
   const [localBoard, setLocalBoard] = useState<CellValue[]>(Array(9).fill(null));
   const [localTurn, setLocalTurn] = useState<'X' | 'O'>('X');
   const [localWinner, setLocalWinner] = useState<'X' | 'O' | 'draw' | null>(null);
@@ -62,16 +29,10 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
   const [aiWinner, setAiWinner] = useState<'X' | 'O' | 'draw' | null>(null);
   const [aiThinking, setAiThinking] = useState(false);
   const [aiScores, setAiScores] = useState({ player: 0, ai: 0, draws: 0 });
-  const [roomIdInput, setRoomIdInput] = useState('');
 
   useEffect(() => {
-    setSelectedMode(mode === 'offline' ? 'local' : 'online');
+    setSelectedMode('local');
   }, [mode]);
-
-  const flattenedOnlineBoard = useMemo(() => {
-    if (!game) return Array(9).fill(null) as CellValue[];
-    return game.board.flat();
-  }, [game]);
 
   const checkWinner = (board: CellValue[]): 'X' | 'O' | null => {
     const lines = [
@@ -108,175 +69,6 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     setAiWinner(null);
     setAiThinking(false);
   };
-
-  // Connect to Socket.IO (online mode only)
-  useEffect(() => {
-    if (selectedMode !== 'online') return;
-    const s = io(apiUrl, {
-      transports: ['websocket'],
-      query: { telegramId: String(telegramId) },
-    });
-
-    s.on('connect', () => {
-      console.log('[TicTacToe] Socket connected');
-      setSocketConnected(true);
-    });
-
-    s.on('disconnect', () => {
-      setSocketConnected(false);
-    });
-
-    s.on('game:started', () => {
-      setGame(prev => prev ? { ...prev, status: 'playing' } : null);
-    });
-
-    s.on('game:update', (data: {
-      board: Board;
-      status: string;
-      winnerId: string | null;
-      player1?: { id: string; firstName: string; telegramId: string };
-      player2?: { id: string; firstName: string; telegramId: string };
-    }) => {
-      setGame(prev => {
-        if (!prev) return null;
-        const moveCount = data.board.flat().filter(c => c !== null).length;
-        const isXTurn = moveCount % 2 === 0;
-        const isMyTurn = prev.isPlayerX ? isXTurn : !isXTurn;
-
-        return {
-          ...prev,
-          board: data.board,
-          status: data.status === 'FINISHED' ? 'finished' : 'playing',
-          winnerId: data.winnerId,
-          isMyTurn: data.status === 'FINISHED' ? false : isMyTurn,
-          player1Name: data.player1?.firstName || prev.player1Name,
-          player2Name: data.player2?.firstName || prev.player2Name,
-        };
-      });
-    });
-
-    s.on('game_over', (data: {
-      board: Board;
-      winnerId: string | null;
-      player1?: { id: string; firstName: string; telegramId: string };
-      player2?: { id: string; firstName: string; telegramId: string };
-    }) => {
-      setGame(prev => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          board: data.board,
-          status: 'finished',
-          winnerId: data.winnerId,
-          isMyTurn: false,
-          player1Name: data.player1?.firstName || prev.player1Name,
-          player2Name: data.player2?.firstName || prev.player2Name,
-        };
-      });
-    });
-
-    s.on('game:error', (data: { message: string }) => {
-      setError(data.message);
-      setTimeout(() => setError(null), 3000);
-    });
-
-    setSocket(s);
-
-    return () => {
-      setSocketConnected(false);
-      s.disconnect();
-    };
-  }, [apiUrl, selectedMode, telegramId]);
-
-  // Auto-join game from URL param
-  useEffect(() => {
-    if (gameIdFromUrl && socket) {
-      joinGame(gameIdFromUrl);
-    }
-  }, [gameIdFromUrl, socket]);
-
-  const createGame = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      if (!socketConnected) {
-        throw new Error('Socket not connected');
-      }
-      const response = await axios.post(`${apiUrl}/api/games/create`, {
-        telegramId: String(telegramId),
-      });
-
-      const { game: createdGame, inviteLink } = response.data;
-
-      // Fetch full game data
-      const fullGame = await axios.get(`${apiUrl}/api/games/${createdGame.id}`);
-      const gameData = fullGame.data.game;
-
-      const newGame: GameState = {
-        gameId: createdGame.id,
-        board: emptyBoard,
-        status: 'waiting',
-        playerId: gameData.player1.id,
-        isPlayerX: true,
-        isMyTurn: true,
-        winnerId: null,
-        player1Name: firstName,
-        player2Name: '',
-        inviteLink,
-      };
-
-      setGame(newGame);
-      socket?.emit('game:join', createdGame.id);
-    } catch (err) {
-      console.error('[TicTacToe] Create error:', err);
-      const fallbackMessage = socketConnected ? 'Не вдалося створити гру' : 'Немає зʼєднання з сервером гри';
-      setError(fallbackMessage);
-    } finally {
-      setLoading(false);
-    }
-  }, [apiUrl, telegramId, firstName, socket]);
-
-  const joinGame = useCallback(async (gameId: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      if (!socketConnected) {
-        throw new Error('Socket not connected');
-      }
-      const response = await axios.post(`${apiUrl}/api/games/join`, {
-        telegramId: String(telegramId),
-        gameId,
-      });
-
-      const gameData = response.data.game;
-
-      // Fetch full game
-      const fullGame = await axios.get(`${apiUrl}/api/games/${gameId}`);
-      const full = fullGame.data.game;
-
-      const joinedGame: GameState = {
-        gameId,
-        board: gameData.boardState as Board,
-        status: 'playing',
-        playerId: full.player2?.id || '',
-        isPlayerX: false,
-        isMyTurn: false, // X goes first, player2 is O
-        winnerId: null,
-        player1Name: full.player1?.firstName || 'Гравець 1',
-        player2Name: firstName,
-        inviteLink: '',
-      };
-
-      setGame(joinedGame);
-      socket?.emit('game:join', gameId);
-    } catch (err: any) {
-      console.error('[TicTacToe] Join error:', err);
-      const fallbackMessage = socketConnected ? 'Не вдалося приєднатися' : 'Немає зʼєднання з сервером гри';
-      setError(err.response?.data?.error || fallbackMessage);
-    } finally {
-      setLoading(false);
-    }
-  }, [apiUrl, telegramId, firstName, socket]);
 
   const handleLocalMove = (index: number) => {
     if (localWinner || localBoard[index]) return;
@@ -361,30 +153,6 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     }, 600);
   };
 
-  const makeMove = useCallback((row: number, col: number) => {
-    if (!game || !socket) return;
-    if (!game.isMyTurn || game.status !== 'playing') return;
-    if (game.board[row][col] !== null) return;
-
-    socket.emit('make_move', {
-      gameId: game.gameId,
-      playerId: game.playerId,
-      row,
-      col,
-    });
-  }, [game, socket]);
-
-  const resetGame = useCallback(() => {
-    setGame(null);
-    setError(null);
-    setRoomIdInput('');
-  }, []);
-
-  const copyInviteLink = useCallback(() => {
-    if (!game?.inviteLink) return;
-    navigator.clipboard.writeText(game.inviteLink).catch(() => {});
-  }, [game]);
-
   const renderCellValue = (value: CellValue) => value ?? '';
 
   const getLocalStatus = () => {
@@ -404,29 +172,6 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
     return 'Твій хід (X)';
   };
 
-  const onlineStatusText = () => {
-    if (!game) return 'Введіть свій Telegram ID та створіть/приєднайтесь до кімнати';
-    if (game.status === 'waiting') return 'Чекаємо на суперника...';
-    if (game.status === 'finished') return game.winnerId ? 'Гра закінчена! Є переможець.' : 'Гра закінчена! Нічия!';
-    return game.isMyTurn ? 'Твій хід!' : 'Хід суперника...';
-  };
-
-  const handleOnlineCellClick = (index: number) => {
-    if (!game || game.status !== 'playing') return;
-    if (!game.isMyTurn) return;
-    const row = Math.floor(index / 3);
-    const col = index % 3;
-    makeMove(row, col);
-  };
-
-  const handleJoinRoom = async () => {
-    if (!roomIdInput.trim()) {
-      await createGame();
-      return;
-    }
-    await joinGame(roomIdInput.trim());
-  };
-
   return (
     <div className="space-y-6">
       <header className="text-center">
@@ -439,7 +184,6 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
           {([
             { id: 'local', label: '🎮 Локально (2 гравців)' },
             { id: 'ai', label: '🤖 проти AI' },
-            { id: 'online', label: '🌐 Онлайн' },
           ] as const).map((entry) => (
             <button
               key={entry.id}
@@ -550,89 +294,6 @@ export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUser
           </div>
         )}
 
-        {selectedMode === 'online' && (
-          <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
-            <h2 className="text-lg font-bold mb-4" style={{ color: theme.textColor }}>🌐 Грати онлайн</h2>
-            {!game && (
-              <div>
-                <p className="mb-4 text-sm" style={{ color: theme.hintColor }}>
-                  Введіть свій Telegram ID та створіть/приєднайтесь до кімнати
-                </p>
-                <input
-                  className="w-full rounded-xl px-3 py-2 text-sm mb-2"
-                  placeholder="Ваш Telegram ID"
-                  value={String(telegramId)}
-                  readOnly
-                  style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
-                />
-                <input
-                  className="w-full rounded-xl px-3 py-2 text-sm"
-                  placeholder="ID кімнати (залиште порожнім для нової)"
-                  value={roomIdInput}
-                  onChange={(event) => setRoomIdInput(event.target.value)}
-                  style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
-                />
-                <button
-                  className="mt-3 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
-                  style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
-                  onClick={handleJoinRoom}
-                  disabled={loading || !socketConnected}
-                >
-                  {loading ? 'Підключаємо...' : socketConnected ? 'Створити/Приєднатись' : 'Підключення...'}
-                </button>
-                {!socketConnected && (
-                  <p className="mt-3 text-sm" style={{ color: theme.hintColor }}>
-                    Підключення до сервера гри...
-                  </p>
-                )}
-                {error && <p className="mt-3 text-sm text-red-200">{error}</p>}
-              </div>
-            )}
-
-            {game && (
-              <div>
-                <div className="p-3 rounded-lg mb-4 text-center" style={{ backgroundColor: theme.secondaryBgColor }}>
-                  <p className="text-sm" style={{ color: theme.hintColor }}>ID кімнати:</p>
-                  <p className="font-mono text-lg" style={{ color: theme.textColor }}>{game.gameId}</p>
-                </div>
-                <div className="text-center mb-4 text-sm" style={{ color: theme.hintColor }}>
-                  {onlineStatusText()}
-                </div>
-                <div className="grid grid-cols-3 gap-3 w-full max-w-[300px] mx-auto">
-                  {flattenedOnlineBoard.map((cell, index) => (
-                    <button
-                      key={`online-${index}`}
-                      className="aspect-square w-full rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
-                      onClick={() => handleOnlineCellClick(index)}
-                      disabled={game.status !== 'playing' || !game.isMyTurn || cell !== null}
-                      style={{
-                        backgroundColor: theme.secondaryBgColor,
-                        color: cell === 'X' ? '#667eea' : cell === 'O' ? '#764ba2' : theme.textColor,
-                        border: `2px solid ${theme.hintColor}20`,
-                      }}
-                    >
-                      {renderCellValue(cell)}
-                    </button>
-                  ))}
-                </div>
-                <button
-                  className="mt-6 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
-                  style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
-                  onClick={resetGame}
-                >
-                  Покинути кімнату
-                </button>
-                <button
-                  className="mt-3 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
-                  style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
-                  onClick={copyInviteLink}
-                >
-                  📋 Копіювати посилання
-                </button>
-              </div>
-            )}
-          </div>
-        )}
       </main>
     </div>
   );

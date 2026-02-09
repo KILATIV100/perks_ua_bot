@@ -5,6 +5,7 @@ import { WheelOfFortune } from './components/WheelOfFortune';
 import { Menu, CartItem } from './components/Menu';
 import { Radio } from './components/Radio';
 import { TicTacToe } from './components/TicTacToe';
+import { PerkyCoffeeCatcher } from './components/PerkyCoffeeCatcher';
 import { Checkout } from './components/Checkout';
 
 type TabType = 'locations' | 'menu' | 'shop' | 'games' | 'bonuses';
@@ -33,7 +34,7 @@ function App() {
   const [nextSpinAt, setNextSpinAt] = useState<string | null>(null);
   const [showTerms, setShowTerms] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [gameMode, setGameMode] = useState<'online' | 'offline'>('online');
+  const [gameMode] = useState<'online' | 'offline'>('offline');
   const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe' | 'perky_catch' | 'barista_rush' | 'memory_coffee' | 'perky_jump' | 'radio'>('tic_tac_toe');
   const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
@@ -69,12 +70,6 @@ function App() {
   const referralId = useMemo(() => {
     if (startParam?.startsWith('ref_')) {
       return startParam.replace('ref_', '');
-    }
-    return null;
-  }, [startParam]);
-  const gameIdFromUrl = useMemo(() => {
-    if (startParam?.startsWith('game_')) {
-      return startParam.replace('game_', '');
     }
     return null;
   }, [startParam]);
@@ -298,11 +293,6 @@ function App() {
             {funZoneGame === 'tic_tac_toe' && (
               telegramUser ? (
                 <TicTacToe
-                  apiUrl={API_URL}
-                  telegramId={telegramUser.id}
-                  firstName={telegramUser.firstName}
-                  botUsername={BOT_USERNAME}
-                  gameIdFromUrl={gameIdFromUrl}
                   theme={theme}
                   mode={gameMode}
                 />
@@ -315,9 +305,13 @@ function App() {
               )
             )}
 
+            {funZoneGame === 'perky_catch' && (
+              <PerkyCoffeeCatcher theme={theme} />
+            )}
+
             {funZoneGame === 'radio' && <Radio theme={theme} />}
 
-            {['perky_catch', 'barista_rush', 'memory_coffee', 'perky_jump'].includes(funZoneGame) && (
+            {['barista_rush', 'memory_coffee', 'perky_jump'].includes(funZoneGame) && (
               <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
                 <p className="text-sm" style={{ color: theme.hintColor }}>
                   Ця гра ще готується. Скоро додамо! 🚀
