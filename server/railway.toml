@@ -1,13 +1,16 @@
 [build]
 builder = "nixpacks"
-buildCommand = "npm install && npm run build"
+# DB migrations + seed run during BUILD — no healthcheck timer here.
+# prisma generate is already done inside npm run build (prisma generate && tsc).
+buildCommand = "npm install && npm run build && npx prisma db push --skip-generate --accept-data-loss && npx prisma db seed"
 
 [deploy]
-startCommand = "npx prisma db push --skip-generate --accept-data-loss && npx prisma db seed && npm run start"
+# Node starts immediately — server is live within ~2s, well within healthcheck window.
+startCommand = "npm run start"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 healthcheckPath = "/health"
-healthcheckTimeout = 60
+healthcheckTimeout = 30
 
 [env]
 NODE_ENV = "production"
