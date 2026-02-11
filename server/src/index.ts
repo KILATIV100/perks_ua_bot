@@ -57,7 +57,7 @@ app.register(cors, {
 app.decorate('prisma', prisma);
 
 // ── Health ───────────────────────────────────────────────────────────────────
-app.get('/health', async () => 'OK');
+app.get('/health', async (_req, reply) => reply.send({ status: 'ok' }));
 
 // ── Module routes ────────────────────────────────────────────────────────────
 app.register(loyaltyRoutes, { prefix: '/api/loyalty' });
