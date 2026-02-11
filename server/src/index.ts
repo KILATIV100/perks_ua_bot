@@ -99,13 +99,17 @@ async function autoSeedProducts(): Promise<void> {
 
 async function start(): Promise<void> {
   try {
-    await ensureOwnerExists();
-    await autoSeedProducts();
     await app.ready();
     if (app.io) {
       setupGameSockets(app.io, prisma);
     }
+    // Listen first — server responds to /health immediately.
     await app.listen({ port: Number(process.env.PORT) || 3000, host: '0.0.0.0' });
+
+    // Post-start tasks run in the background after the server is already live.
+    // They are fast no-ops when the DB was already seeded in the build phase.
+    ensureOwnerExists().catch((e) => app.log.error(e, '[startup] owner setup failed'));
+    autoSeedProducts().catch((e) => app.log.error(e, '[startup] auto-seed failed'));
   } catch (err) {
     app.log.error(err);
     process.exit(1);
