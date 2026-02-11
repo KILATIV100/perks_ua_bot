@@ -20,11 +20,7 @@ interface CheckoutProps {
   onSuccess: () => void;
 }
 
-const PICKUP_TIMES = [5, 10, 15, 20];
-
 export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, theme, onClose, onSuccess }: CheckoutProps) {
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'telegram_pay'>('cash');
-  const [pickupMinutes, setPickupMinutes] = useState(10);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,11 +35,8 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
       await axios.post(`${apiUrl}/api/orders`, {
         telegramId: String(telegramId),
         locationId,
-        paymentMethod,
-        pickupMinutes,
         items: cart.map(item => ({
           productId: item.product.id,
-          name: item.product.name,
           quantity: item.quantity,
           price: parseFloat(item.product.price),
         })),
@@ -106,59 +99,6 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
           <div className="flex justify-between items-center pt-2">
             <span className="font-bold" style={{ color: theme.textColor }}>Разом</span>
             <span className="font-bold text-lg" style={{ color: theme.buttonColor }}>{total} грн</span>
-          </div>
-        </div>
-
-        {/* Pickup time */}
-        <div className="mb-4">
-          <p className="text-xs mb-2 font-medium" style={{ color: theme.hintColor }}>Час готовності</p>
-          <div className="grid grid-cols-4 gap-2">
-            {PICKUP_TIMES.map(time => (
-              <button
-                key={time}
-                onClick={() => setPickupMinutes(time)}
-                className="py-2.5 rounded-xl text-sm font-medium transition-all"
-                style={{
-                  backgroundColor: pickupMinutes === time ? theme.buttonColor : theme.secondaryBgColor,
-                  color: pickupMinutes === time ? theme.buttonTextColor : theme.textColor,
-                }}
-              >
-                {time} хв
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Payment method */}
-        <div className="mb-6">
-          <p className="text-xs mb-2 font-medium" style={{ color: theme.hintColor }}>Спосіб оплати</p>
-          <div className="space-y-2">
-            <button
-              onClick={() => setPaymentMethod('cash')}
-              className="w-full p-3 rounded-xl flex items-center gap-3 transition-all"
-              style={{
-                backgroundColor: paymentMethod === 'cash' ? theme.buttonColor + '15' : theme.secondaryBgColor,
-                border: paymentMethod === 'cash' ? `2px solid ${theme.buttonColor}` : '2px solid transparent',
-              }}
-            >
-              <span className="text-xl">💵</span>
-              <span className="text-sm font-medium" style={{ color: theme.textColor }}>При отриманні</span>
-            </button>
-            <button
-              onClick={() => setPaymentMethod('telegram_pay')}
-              className="w-full p-3 rounded-xl flex items-center gap-3 transition-all opacity-50 cursor-not-allowed"
-              style={{
-                backgroundColor: theme.secondaryBgColor,
-                border: '2px solid transparent',
-              }}
-              disabled
-            >
-              <span className="text-xl">💳</span>
-              <div className="flex-1 text-left">
-                <span className="text-sm font-medium" style={{ color: theme.textColor }}>Telegram Pay</span>
-                <span className="text-xs ml-2" style={{ color: theme.hintColor }}>Незабаром</span>
-              </div>
-            </button>
           </div>
         </div>
 

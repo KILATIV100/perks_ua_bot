@@ -4,7 +4,7 @@ export async function locationRoutes(
   app: FastifyInstance,
   _opts: FastifyPluginOptions
 ): Promise<void> {
-  // Get all locations
+  // GET /api/locations
   app.get('', async (_request, reply) => {
     const locations = await app.prisma.location.findMany({
       orderBy: { name: 'asc' },
@@ -18,14 +18,12 @@ export async function locationRoutes(
         canPreorder: true,
       },
     });
-
     return reply.send({ locations });
   });
 
-  // Get location by ID
+  // GET /api/locations/:id
   app.get<{ Params: { id: string } }>(':id', async (request, reply) => {
     const { id } = request.params;
-
     const location = await app.prisma.location.findUnique({
       where: { id },
       select: {
@@ -42,7 +40,6 @@ export async function locationRoutes(
     if (!location) {
       return reply.status(404).send({ error: 'Location not found' });
     }
-
     return reply.send({ location });
   });
 }

@@ -22,7 +22,6 @@ export async function productRoutes(
         },
       });
 
-      // Group by category
       const categories = new Map<string, typeof products>();
       for (const product of products) {
         const cat = product.category;

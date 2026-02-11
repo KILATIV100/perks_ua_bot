@@ -5,6 +5,7 @@ import { WheelOfFortune } from './components/WheelOfFortune';
 import { Menu, CartItem } from './components/Menu';
 import { Checkout } from './components/Checkout';
 import { TicTacToe } from './components/TicTacToe';
+import { PerkieJump } from './components/PerkieJump';
 import { Radio } from './components/Radio';
 
 // Types
@@ -34,7 +35,7 @@ interface AppUser {
   username: string | null;
   firstName: string | null;
   points: number;
-  lastSpin: string | null;
+  lastSpinDate: string | null;
 }
 
 interface TelegramTheme {
@@ -46,22 +47,15 @@ interface TelegramTheme {
   secondaryBgColor: string;
 }
 
-// API base URL - MUST be set for cross-origin requests
-// Fallback to production URL if VITE_API_URL is not set
 const API_URL = import.meta.env.VITE_API_URL || 'https://backend-production-5ee9.up.railway.app';
-
-// Bot username for referral links
 const BOT_USERNAME = import.meta.env.VITE_BOT_USERNAME || 'perkup_ua_bot';
-console.log('[PerkUp] API:', API_URL);
 
-// Axios instance
 const api = axios.create({
   baseURL: API_URL,
   timeout: 10000,
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Get Telegram theme colors
 function useTelegramTheme(): TelegramTheme {
   return useMemo(() => {
     const params = WebApp.themeParams;
@@ -76,7 +70,6 @@ function useTelegramTheme(): TelegramTheme {
   }, []);
 }
 
-// Get Telegram user data with localStorage fallback for dev/testing
 function useTelegramUser(): TelegramUser | null {
   return useMemo(() => {
     const user = WebApp.initDataUnsafe?.user;
@@ -89,33 +82,20 @@ function useTelegramUser(): TelegramUser | null {
         username: user.username,
       };
     }
-
-    // Fallback: try localStorage (for dev mode or if initData is temporarily empty)
     try {
       const saved = localStorage.getItem('perkup_user');
       if (saved) {
         const parsed = JSON.parse(saved);
-        return {
-          id: parsed.id,
-          firstName: parsed.first_name || 'Гість',
-          lastName: parsed.last_name,
-          username: parsed.username,
-        };
+        return { id: parsed.id, firstName: parsed.first_name || 'Гість', lastName: parsed.last_name, username: parsed.username };
       }
     } catch { /* ignore */ }
-
-    // Fallback: URL params for testing (?telegramId=12345)
     const urlParams = new URLSearchParams(window.location.search);
     const devId = urlParams.get('telegramId') || urlParams.get('user_id');
-    if (devId) {
-      return { id: Number(devId), firstName: 'Dev User' };
-    }
-
+    if (devId) return { id: Number(devId), firstName: 'Dev User' };
     return null;
   }, []);
 }
 
-// Points required for redemption
 const REDEEM_POINTS = 100;
 
 function App() {
@@ -127,14 +107,11 @@ function App() {
   const [appUser, setAppUser] = useState<AppUser | null>(null);
   const [canSpin, setCanSpin] = useState(true);
   const [showTerms, setShowTerms] = useState(false);
-  const [redeemCode, setRedeemCode] = useState<string | null>(null);
-  const [isRedeeming, setIsRedeeming] = useState(false);
-  const [showConfetti, setShowConfetti] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [showCheckout, setShowCheckout] = useState(false);
   const [funZoneTab, setFunZoneTab] = useState<'games' | 'radio'>('games');
+  const [selectedGame, setSelectedGame] = useState<'tictactoe' | 'perkiejump' | null>(null);
 
-  // Check for game_id in URL (deep link from invite)
   const gameIdFromUrl = useMemo(() => {
     const urlParams = new URLSearchParams(window.location.search);
     return urlParams.get('game_id') || null;
@@ -145,7 +122,6 @@ function App() {
   const theme = useTelegramTheme();
   const telegramUser = useTelegramUser();
 
-  // Initialize Telegram WebApp
   useEffect(() => {
     WebApp.ready();
     WebApp.expand();
@@ -153,7 +129,6 @@ function App() {
     WebApp.setBackgroundColor(theme.secondaryBgColor);
   }, [theme]);
 
-  // Auto-navigate to game if game_id in URL
   useEffect(() => {
     if (gameIdFromUrl) {
       setActiveTab('funzone');
@@ -161,26 +136,18 @@ function App() {
     }
   }, [gameIdFromUrl]);
 
-  // Sync user with backend (works for Telegram, localStorage fallback, and URL param users)
   useEffect(() => {
-    if (telegramUser) {
-      syncUser();
-    }
+    if (telegramUser) syncUser();
   }, [telegramUser]);
 
-  // Fetch locations
-  useEffect(() => {
-    fetchLocations();
-  }, []);
+  useEffect(() => { fetchLocations(); }, []);
 
-  // Handle Main Button for locations tab
   useEffect(() => {
     if (activeTab === 'locations' && selectedLocation?.status === 'active') {
       WebApp.MainButton.text = 'Замовити';
       WebApp.MainButton.color = theme.buttonColor;
       WebApp.MainButton.textColor = theme.buttonTextColor;
       WebApp.MainButton.show();
-
       const handleClick = () => handleOrder(selectedLocation);
       WebApp.MainButton.onClick(handleClick);
       return () => WebApp.MainButton.offClick(handleClick);
@@ -191,33 +158,25 @@ function App() {
 
   const syncUser = async () => {
     if (!telegramUser) return;
-
     try {
       const response = await api.post<{ user: AppUser }>('/api/user/sync', {
         telegramId: String(telegramUser.id),
         username: telegramUser.username,
         firstName: telegramUser.firstName,
       });
-
       const user = response.data.user;
       if (!user) return;
-
       setAppUser(user);
 
-      // Check if can spin (Kyiv midnight reset)
-      if (user.lastSpin) {
-        const lastSpin = new Date(user.lastSpin);
-        // Get today's date in Kyiv timezone
+      // Check if can spin (Kyiv midnight reset) — lastSpinDate is YYYY-MM-DD string
+      if (user.lastSpinDate) {
         const kyivToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' });
-        const spinDay = lastSpin.toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' });
-
-        if (spinDay === kyivToday) {
+        if (user.lastSpinDate === kyivToday) {
           setCanSpin(false);
         } else {
           setCanSpin(true);
         }
       }
-
     } catch (err) {
       console.error('[PerkUp] Sync error:', err);
     }
@@ -231,9 +190,7 @@ function App() {
       setLocations(response.data.locations);
     } catch (err) {
       console.error('[PerkUp] Locations error:', err);
-      setError(axios.isAxiosError(err)
-        ? err.response?.data?.error || 'Не вдалося завантажити локації'
-        : 'Не вдалося завантажити локації');
+      setError('Не вдалося завантажити локації');
     } finally {
       setLoading(false);
     }
@@ -250,8 +207,6 @@ function App() {
 
   const handleSpin = async (userLat?: number, userLng?: number): Promise<{ reward: number; newBalance: number } | { error: string; message: string } | null> => {
     if (!telegramUser) return null;
-
-    // Check for dev/admin mode in URL
     const urlParams = new URLSearchParams(window.location.search);
     const devMode = urlParams.get('dev') === 'true' || urlParams.get('admin') === 'true';
 
@@ -262,19 +217,13 @@ function App() {
         userLng,
         devMode,
       });
-
       setAppUser(prev => prev ? { ...prev, points: response.data.newBalance } : null);
       setCanSpin(false);
-
       return { reward: response.data.reward, newBalance: response.data.newBalance };
     } catch (err) {
-      // Spin error handling
       if (axios.isAxiosError(err)) {
-        if (err.response?.status === 429) {
-          setCanSpin(false);
-        }
+        if (err.response?.status === 429) setCanSpin(false);
         if (err.response?.status === 403) {
-          // Too far from location
           return { error: err.response.data.error, message: err.response.data.message };
         }
       }
@@ -284,43 +233,12 @@ function App() {
 
   const handleInvite = useCallback(() => {
     if (!telegramUser || !BOT_USERNAME) return;
-
     const referralLink = `https://t.me/${BOT_USERNAME}?start=ref${telegramUser.id}`;
     const shareText = 'Приєднуйся до PerkUp — крути Колесо Фортуни та отримуй безкоштовну каву! ☕🎡';
     const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent(shareText)}`;
-
     WebApp.openTelegramLink(shareUrl);
   }, [telegramUser]);
 
-  const handleRedeem = async () => {
-    if (!telegramUser || isRedeeming) return;
-    if (!appUser || appUser.points < REDEEM_POINTS) return;
-
-    setIsRedeeming(true);
-    try {
-      const response = await api.post<{ code: string; newBalance: number }>('/api/user/redeem', {
-        telegramId: String(telegramUser.id),
-      });
-
-      setAppUser(prev => prev ? { ...prev, points: response.data.newBalance } : null);
-      setRedeemCode(response.data.code);
-      setShowConfetti(true);
-
-      // Hide confetti after 5 seconds
-      setTimeout(() => setShowConfetti(false), 5000);
-    } catch (err) {
-      // Redeem error handling
-      if (axios.isAxiosError(err) && err.response?.data?.message) {
-        WebApp.showAlert(err.response.data.message);
-      } else {
-        WebApp.showAlert('Не вдалося обміняти бали. Спробуйте пізніше.');
-      }
-    } finally {
-      setIsRedeeming(false);
-    }
-  };
-
-  // Loading state
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: theme.secondaryBgColor }}>
@@ -333,7 +251,6 @@ function App() {
     );
   }
 
-  // Error state
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4" style={{ backgroundColor: theme.secondaryBgColor }}>
@@ -371,7 +288,6 @@ function App() {
                 Привіт, {telegramUser?.firstName || appUser?.firstName || 'Гість'}!
               </p>
             </div>
-            {/* Balance with Progress */}
             <div className="flex flex-col items-end">
               <div className="flex items-center gap-2 px-4 py-2 rounded-full" style={{ backgroundColor: '#FFF8E1' }}>
                 <span className="text-lg">🪙</span>
@@ -379,18 +295,15 @@ function App() {
                   {appUser ? appUser.points : '...'}
                 </span>
               </div>
-              {/* Progress bar */}
               {appUser && (
                 <div className="mt-1 w-full px-1">
                   <div className="flex items-center gap-1">
                     <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: theme.hintColor + '30' }}>
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
+                      <div className="h-full rounded-full transition-all duration-500"
                         style={{
                           width: `${Math.min((appUser.points / REDEEM_POINTS) * 100, 100)}%`,
                           backgroundColor: appUser.points >= REDEEM_POINTS ? '#22c55e' : '#FFB300',
-                        }}
-                      />
+                        }} />
                     </div>
                     <span className="text-xs" style={{ color: theme.hintColor }}>
                       {appUser.points >= REDEEM_POINTS ? '100' : appUser.points}/{REDEEM_POINTS}
@@ -404,9 +317,7 @@ function App() {
           {/* Tabs */}
           <div className="flex gap-1 mt-4 overflow-x-auto scrollbar-hide">
             {(['locations', 'menu', 'shop', 'bonuses', 'funzone'] as TabType[]).map(tab => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
+              <button key={tab} onClick={() => setActiveTab(tab)}
                 className="flex-shrink-0 py-2 px-3 rounded-xl text-xs font-medium transition-all whitespace-nowrap"
                 style={{
                   backgroundColor: activeTab === tab ? theme.buttonColor : theme.secondaryBgColor,
@@ -422,7 +333,6 @@ function App() {
       {/* Main content */}
       <main className="p-4 pb-24">
         {activeTab === 'menu' ? (
-          /* Menu Tab */
           <div>
             {selectedLocation ? (
               <>
@@ -431,56 +341,36 @@ function App() {
                     <h2 className="text-lg font-semibold" style={{ color: theme.textColor }}>Меню</h2>
                     <p className="text-xs" style={{ color: theme.hintColor }}>📍 {selectedLocation.name}</p>
                   </div>
-                  <button
-                    onClick={() => { setSelectedLocation(null); setActiveTab('locations'); }}
+                  <button onClick={() => { setSelectedLocation(null); setActiveTab('locations'); }}
                     className="text-xs px-3 py-1.5 rounded-lg"
-                    style={{ backgroundColor: theme.hintColor + '20', color: theme.hintColor }}
-                  >
+                    style={{ backgroundColor: theme.hintColor + '20', color: theme.hintColor }}>
                     Змінити
                   </button>
                 </div>
-                <Menu
-                  apiUrl={API_URL}
-                  cart={cart}
-                  onCartChange={setCart}
-                  theme={theme}
-                  canPreorder={selectedLocation.canPreorder}
-                  locationName={selectedLocation.name}
-                  mode="menu"
-                />
+                <Menu apiUrl={API_URL} cart={cart} onCartChange={setCart} theme={theme}
+                  canPreorder={selectedLocation.canPreorder} locationName={selectedLocation.name} mode="menu" />
               </>
             ) : (
               <div className="text-center py-12">
                 <p className="text-4xl mb-4">📍</p>
                 <p className="font-medium mb-2" style={{ color: theme.textColor }}>Оберіть локацію</p>
-                <p className="text-sm mb-4" style={{ color: theme.hintColor }}>
-                  Спочатку оберіть кав'ярню, щоб побачити меню
-                </p>
-                <button
-                  onClick={() => setActiveTab('locations')}
+                <p className="text-sm mb-4" style={{ color: theme.hintColor }}>Спочатку оберіть кав'ярню, щоб побачити меню</p>
+                <button onClick={() => setActiveTab('locations')}
                   className="py-2.5 px-6 rounded-xl text-sm font-medium transition-all active:scale-95"
-                  style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
-                >
+                  style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}>
                   Обрати локацію
                 </button>
               </div>
             )}
           </div>
         ) : activeTab === 'shop' ? (
-          /* Shop Tab - available regardless of location */
           <div>
             <div className="mb-4">
               <h2 className="text-lg font-semibold" style={{ color: theme.textColor }}>Магазин</h2>
               <p className="text-xs" style={{ color: theme.hintColor }}>Мерч та кава для дому</p>
             </div>
-            <Menu
-              apiUrl={API_URL}
-              cart={cart}
-              onCartChange={setCart}
-              theme={theme}
-              canPreorder={true}
-              mode="shop"
-            />
+            <Menu apiUrl={API_URL} cart={cart} onCartChange={setCart} theme={theme}
+              canPreorder={true} mode="shop" />
           </div>
         ) : activeTab === 'locations' ? (
           <>
@@ -488,13 +378,10 @@ function App() {
               <h2 className="text-lg font-semibold mb-1" style={{ color: theme.textColor }}>Оберіть локацію</h2>
               <p className="text-sm" style={{ color: theme.hintColor }}>Виберіть кав'ярню для замовлення</p>
             </div>
-
-            {/* Locations list */}
             <div className="space-y-3">
               {locations.map((location) => {
                 const isSelected = selectedLocation?.id === location.id;
                 const isComingSoon = location.status === 'coming_soon';
-
                 return (
                   <div key={location.id}
                     onClick={() => !isComingSoon && handleSelectLocation(location)}
@@ -542,60 +429,81 @@ function App() {
                 );
               })}
             </div>
-
             {locations.length === 0 && (
-              <div className="text-center py-12">
-                <p style={{ color: theme.hintColor }}>Локації не знайдено</p>
-              </div>
+              <div className="text-center py-12"><p style={{ color: theme.hintColor }}>Локації не знайдено</p></div>
             )}
           </>
         ) : activeTab === 'funzone' ? (
-          /* Fun Zone Tab */
           <div>
             <div className="mb-4">
               <h2 className="text-lg font-semibold mb-1" style={{ color: theme.textColor }}>Fun Zone</h2>
               <p className="text-sm" style={{ color: theme.hintColor }}>Ігри та розваги</p>
             </div>
-
-            {/* Fun Zone sub-tabs */}
             <div className="flex gap-2 mb-6">
-              <button
-                onClick={() => setFunZoneTab('games')}
+              <button onClick={() => setFunZoneTab('games')}
                 className="flex-1 py-2 px-4 rounded-xl text-sm font-medium transition-all"
                 style={{
                   backgroundColor: funZoneTab === 'games' ? theme.buttonColor : theme.bgColor,
                   color: funZoneTab === 'games' ? theme.buttonTextColor : theme.textColor,
-                }}
-              >
+                }}>
                 🎮 Ігри
               </button>
-              <button
-                onClick={() => setFunZoneTab('radio')}
+              <button onClick={() => setFunZoneTab('radio')}
                 className="flex-1 py-2 px-4 rounded-xl text-sm font-medium transition-all"
                 style={{
                   backgroundColor: funZoneTab === 'radio' ? theme.buttonColor : theme.bgColor,
                   color: funZoneTab === 'radio' ? theme.buttonTextColor : theme.textColor,
-                }}
-              >
+                }}>
                 📻 Радіо
               </button>
             </div>
-
             {funZoneTab === 'games' ? (
               <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
                 {telegramUser ? (
-                  <TicTacToe
-                    apiUrl={API_URL}
-                    telegramId={telegramUser.id}
-                    firstName={telegramUser.firstName}
-                    botUsername={BOT_USERNAME}
-                    gameIdFromUrl={gameIdFromUrl}
-                    theme={theme}
-                  />
+                  selectedGame === 'tictactoe' || gameIdFromUrl ? (
+                    <div>
+                      {!gameIdFromUrl && (
+                        <button onClick={() => setSelectedGame(null)} className="text-sm mb-4 flex items-center gap-1"
+                          style={{ color: theme.hintColor }}>
+                          &larr; Назад до ігор
+                        </button>
+                      )}
+                      <TicTacToe apiUrl={API_URL} telegramId={telegramUser.id} firstName={telegramUser.firstName}
+                        botUsername={BOT_USERNAME} gameIdFromUrl={gameIdFromUrl} theme={theme} />
+                    </div>
+                  ) : selectedGame === 'perkiejump' ? (
+                    <div>
+                      <button onClick={() => setSelectedGame(null)} className="text-sm mb-4 flex items-center gap-1"
+                        style={{ color: theme.hintColor }}>
+                        &larr; Назад до ігор
+                      </button>
+                      <PerkieJump apiUrl={API_URL} telegramId={telegramUser.id} theme={theme}
+                        onPointsUpdate={(newBalance) => setAppUser(prev => prev ? { ...prev, points: newBalance } : null)} />
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <button onClick={() => setSelectedGame('tictactoe')}
+                        className="w-full p-4 rounded-xl text-left flex items-center gap-3 transition-all active:scale-[0.98]"
+                        style={{ backgroundColor: theme.secondaryBgColor }}>
+                        <span className="text-3xl">❌⭕</span>
+                        <div>
+                          <p className="font-semibold" style={{ color: theme.textColor }}>Хрестики-нулики</p>
+                          <p className="text-xs" style={{ color: theme.hintColor }}>PvE з AI, PvP локально або онлайн</p>
+                        </div>
+                      </button>
+                      <button onClick={() => setSelectedGame('perkiejump')}
+                        className="w-full p-4 rounded-xl text-left flex items-center gap-3 transition-all active:scale-[0.98]"
+                        style={{ backgroundColor: theme.secondaryBgColor }}>
+                        <span className="text-3xl">☕</span>
+                        <div>
+                          <p className="font-semibold" style={{ color: theme.textColor }}>Perkie Jump</p>
+                          <p className="text-xs" style={{ color: theme.hintColor }}>Стрибай вгору та збирай бали!</p>
+                        </div>
+                      </button>
+                    </div>
+                  )
                 ) : (
-                  <div className="text-center py-8">
-                    <p style={{ color: theme.hintColor }}>Увійдіть через Telegram, щоб грати</p>
-                  </div>
+                  <div className="text-center py-8"><p style={{ color: theme.hintColor }}>Увійдіть через Telegram, щоб грати</p></div>
                 )}
               </div>
             ) : (
@@ -605,67 +513,7 @@ function App() {
         ) : (
           /* Bonuses Tab */
           <div>
-            {/* Rewards Section */}
-            <div className="mb-6 p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
-              <h3 className="font-semibold mb-3 flex items-center gap-2" style={{ color: theme.textColor }}>
-                <span>🎁</span> Твої нагороди
-              </h3>
-
-              {/* Redeem Code Display */}
-              {redeemCode && (
-                <div className="mb-4 p-4 rounded-xl text-center" style={{ backgroundColor: '#ECFDF5' }}>
-                  <p className="text-sm mb-2" style={{ color: '#065f46' }}>Твій код:</p>
-                  <p className="text-2xl font-bold mb-2" style={{ color: '#059669' }}>{redeemCode}</p>
-                  <p className="text-xs" style={{ color: '#065f46' }}>
-                    Покажи цей код баристі, щоб отримати будь-який напій до 100 грн!
-                  </p>
-                  <p className="text-xs mt-2" style={{ color: '#6b7280' }}>
-                    Код дійсний 15 хвилин
-                  </p>
-                </div>
-              )}
-
-              {/* Redeem Button */}
-              {appUser && (
-                <button
-                  onClick={handleRedeem}
-                  disabled={appUser.points < REDEEM_POINTS || isRedeeming}
-                  className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
-                  style={{
-                    backgroundColor: appUser.points >= REDEEM_POINTS ? '#059669' : theme.hintColor + '30',
-                    color: appUser.points >= REDEEM_POINTS ? '#ffffff' : theme.hintColor,
-                  }}
-                >
-                  {isRedeeming ? (
-                    'Обробка...'
-                  ) : appUser.points >= REDEEM_POINTS ? (
-                    '☕ Обміняти 100 балів на напій'
-                  ) : (
-                    `Збери ще ${REDEEM_POINTS - appUser.points} балів`
-                  )}
-                </button>
-              )}
-
-              {/* Progress indicator */}
-              {appUser && appUser.points < REDEEM_POINTS && (
-                <div className="mt-3">
-                  <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: theme.hintColor + '20' }}>
-                    <div
-                      className="h-full rounded-full transition-all duration-500"
-                      style={{
-                        width: `${(appUser.points / REDEEM_POINTS) * 100}%`,
-                        backgroundColor: '#FFB300',
-                      }}
-                    />
-                  </div>
-                  <p className="text-xs text-center mt-1" style={{ color: theme.hintColor }}>
-                    {appUser.points} / {REDEEM_POINTS} балів до безкоштовної кави
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Invite Friend Section */}
+            {/* Invite Friend */}
             {BOT_USERNAME && telegramUser && (
               <div className="mb-6 p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
                 <h3 className="font-semibold mb-2 flex items-center gap-2" style={{ color: theme.textColor }}>
@@ -674,33 +522,24 @@ function App() {
                 <p className="text-sm mb-3" style={{ color: theme.hintColor }}>
                   Друг отримає <b style={{ color: theme.textColor }}>+5 балів</b> одразу, а ти — <b style={{ color: theme.textColor }}>+10 балів</b> після його першого обертання колеса!
                 </p>
-                <button
-                  onClick={handleInvite}
+                <button onClick={handleInvite}
                   className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98]"
-                  style={{
-                    backgroundColor: '#2196F3',
-                    color: '#ffffff',
-                  }}
-                >
+                  style={{ backgroundColor: '#2196F3', color: '#ffffff' }}>
                   📨 Запросити друга
                 </button>
               </div>
             )}
 
-            {/* Wheel Section */}
+            {/* Wheel */}
             <div className="mb-6 text-center">
               <h2 className="text-lg font-semibold mb-1" style={{ color: theme.textColor }}>Колесо Фортуни</h2>
               <p className="text-sm" style={{ color: theme.hintColor }}>Крутіть колесо та отримуйте бали!</p>
             </div>
             <WheelOfFortune onSpin={handleSpin} canSpin={canSpin} theme={theme} />
 
-            {/* Terms Link */}
+            {/* Terms */}
             <div className="mt-8 text-center">
-              <button
-                onClick={() => setShowTerms(true)}
-                className="text-sm underline"
-                style={{ color: theme.hintColor }}
-              >
+              <button onClick={() => setShowTerms(true)} className="text-sm underline" style={{ color: theme.hintColor }}>
                 Умови використання
               </button>
             </div>
@@ -721,12 +560,7 @@ function App() {
               setShowCheckout(true);
             }}
             className="w-full py-4 rounded-2xl font-bold text-base flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
-            style={{
-              backgroundColor: theme.buttonColor,
-              color: theme.buttonTextColor,
-              boxShadow: '0 4px 20px rgba(0,0,0,0.25)',
-            }}
-          >
+            style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor, boxShadow: '0 4px 20px rgba(0,0,0,0.25)' }}>
             <span>🛒 Кошик ({cartItemCount})</span>
             <span>·</span>
             <span>{cart.reduce((s, i) => s + parseFloat(i.product.price) * i.quantity, 0)} грн</span>
@@ -736,65 +570,29 @@ function App() {
 
       {/* Checkout Modal */}
       {showCheckout && selectedLocation && telegramUser && (
-        <Checkout
-          apiUrl={API_URL}
-          cart={cart}
-          telegramId={telegramUser.id}
-          locationId={selectedLocation.id}
-          locationName={selectedLocation.name}
-          theme={theme}
+        <Checkout apiUrl={API_URL} cart={cart} telegramId={telegramUser.id}
+          locationId={selectedLocation.id} locationName={selectedLocation.name} theme={theme}
           onClose={() => setShowCheckout(false)}
-          onSuccess={() => {
-            setShowCheckout(false);
-            setCart([]);
-            WebApp.showAlert('Замовлення прийнято! Очікуйте повідомлення від бариста.');
-          }}
-        />
+          onSuccess={() => { setShowCheckout(false); setCart([]); WebApp.showAlert('Замовлення прийнято!'); }} />
       )}
 
       {/* Terms Modal */}
       {showTerms && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
           <div className="w-full max-w-md rounded-2xl p-6 max-h-[80vh] overflow-y-auto" style={{ backgroundColor: theme.bgColor }}>
-            <h2 className="text-lg font-bold mb-4" style={{ color: theme.textColor }}>
-              📜 Умови використання
-            </h2>
+            <h2 className="text-lg font-bold mb-4" style={{ color: theme.textColor }}>📜 Умови використання</h2>
             <div className="space-y-3 text-sm" style={{ color: theme.textColor }}>
               <p>1. Акція діє в усіх кав'ярнях PerkUp.</p>
               <p>2. 100 накопичених балів можна обміняти на один будь-який напій вартістю до 100 грн.</p>
               <p>3. Код на отримання напою дійсний протягом 15 хвилин після активації.</p>
               <p>4. Бали не підлягають обміну на грошовий еквівалент.</p>
             </div>
-            <button
-              onClick={() => setShowTerms(false)}
+            <button onClick={() => setShowTerms(false)}
               className="mt-6 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
-              style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
-            >
+              style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}>
               Зрозуміло
             </button>
           </div>
-        </div>
-      )}
-
-      {/* Confetti Effect */}
-      {showConfetti && (
-        <div className="fixed inset-0 z-40 pointer-events-none overflow-hidden">
-          {[...Array(50)].map((_, i) => (
-            <div
-              key={i}
-              className="absolute animate-confetti"
-              style={{
-                left: `${Math.random() * 100}%`,
-                top: '-10px',
-                width: '10px',
-                height: '10px',
-                backgroundColor: ['#FFD700', '#FF6347', '#4CAF50', '#2196F3', '#9C27B0'][Math.floor(Math.random() * 5)],
-                borderRadius: Math.random() > 0.5 ? '50%' : '0',
-                animationDelay: `${Math.random() * 2}s`,
-                animationDuration: `${2 + Math.random() * 2}s`,
-              }}
-            />
-          ))}
         </div>
       )}
     </div>
