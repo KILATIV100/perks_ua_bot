@@ -1,32 +1,45 @@
 #!/bin/sh
 # Railway startup script.
 # Waits for PostgreSQL to be reachable before running migrations and starting the server.
-# Services in Railway start concurrently — the DB may not be ready immediately.
 
 set -e
 
-MAX_RETRIES=15
-RETRY=0
-WAIT_SEC=4
+# ── Database URL selection ────────────────────────────────────────────────────
+# Railway exposes two PostgreSQL URLs:
+#   DATABASE_URL        — internal (postgres.railway.internal) — only works when
+#                         Private Networking is enabled and both services share the
+#                         same Railway project + environment.
+#   DATABASE_PUBLIC_URL — external proxy (monorail.proxy.rlwy.net) — always reachable.
+#
+# If the internal URL is not reachable (common when private networking is not
+# configured), override with the public URL so deployments always succeed.
+if [ -n "$DATABASE_PUBLIC_URL" ]; then
+  echo "[start] Private networking unavailable — using DATABASE_PUBLIC_URL."
+  export DATABASE_URL="$DATABASE_PUBLIC_URL"
+fi
 
-echo "[start] Waiting for PostgreSQL to be reachable..."
+if [ -z "$DATABASE_URL" ]; then
+  echo "[start] ERROR: Neither DATABASE_URL nor DATABASE_PUBLIC_URL is set."
+  exit 1
+fi
+
+MAX_RETRIES=10
+RETRY=0
+WAIT_SEC=3
+
+echo "[start] Applying schema..."
 
 until npx prisma db push --skip-generate --accept-data-loss; do
   RETRY=$((RETRY + 1))
-
   if [ "$RETRY" -ge "$MAX_RETRIES" ]; then
-    echo "[start] ERROR: Database still unreachable after $MAX_RETRIES attempts."
-    echo "[start] Check that:"
-    echo "  1. The PostgreSQL service is in the same Railway project & environment."
-    echo "  2. DATABASE_URL is set and uses the correct hostname."
+    echo "[start] ERROR: Database unreachable after $MAX_RETRIES attempts. Giving up."
     exit 1
   fi
-
-  echo "[start] Database not ready yet (attempt $RETRY/$MAX_RETRIES). Retrying in ${WAIT_SEC}s..."
+  echo "[start] Not ready yet (attempt $RETRY/$MAX_RETRIES), retrying in ${WAIT_SEC}s..."
   sleep "$WAIT_SEC"
 done
 
-echo "[start] Schema applied. Running seed..."
+echo "[start] Running seed..."
 npx prisma db seed
 
 echo "[start] Starting server..."
