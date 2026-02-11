@@ -6,7 +6,7 @@ buildCommand = "npm install && npm run build"
 [deploy]
 # DB ops run at deploy time when the internal network is available.
 # 'npm run start' = 'node dist/index.js' (no rebuild — already compiled above).
-startCommand = "npx prisma db push --skip-generate --accept-data-loss && npx prisma db seed && npm run start"
+startCommand = "npm run start"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 healthcheckPath = "/health"
