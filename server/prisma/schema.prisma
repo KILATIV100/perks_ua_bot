@@ -24,6 +24,22 @@ enum ProductType {
   BEANS
 }
 
+enum GameType {
+  TIC_TAC_TOE
+  PERKIE_JUMP
+}
+
+enum OpponentType {
+  AI
+  HUMAN
+}
+
+enum GameStatus {
+  WAITING
+  PLAYING
+  FINISHED
+}
+
 model Location {
   id          String         @id @default(uuid())
   name        String
@@ -40,23 +56,24 @@ model Location {
 }
 
 model User {
-  id               String   @id @default(uuid())
-  telegramId       String   @unique
-  username         String?
-  firstName        String?
-  lastName         String?
-  points           Int      @default(0)
-  totalSpins       Int      @default(0)
-  lastSpin         DateTime?
-  lastSpinDate     String?  // Для скидання о 00:00 (YYYY-MM-DD)
-  role             UserRole @default(USER)
-  referredById     String?
-  redemptionCodes  RedemptionCode[]
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  orders           Order[]
-  sessionsAsPlayer1 GameSession[] @relation("Player1")
-  sessionsAsPlayer2 GameSession[] @relation("Player2")
+  id                String           @id @default(uuid())
+  telegramId        String           @unique
+  username          String?
+  firstName         String?
+  lastName          String?
+  points            Int              @default(0)
+  totalSpins        Int              @default(0)
+  lastSpin          DateTime?
+  /// Date string in Kyiv timezone (YYYY-MM-DD). Used to reset spin at 00:00 Kyiv time.
+  lastSpinDate      String?
+  role              UserRole         @default(USER)
+  referredById      String?
+  redemptionCodes   RedemptionCode[]
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  orders            Order[]
+  sessionsAsPlayer1 GameSession[]    @relation("Player1")
+  sessionsAsPlayer2 GameSession[]    @relation("Player2")
 
   @@map("users")
 }
@@ -79,29 +96,37 @@ model Product {
 }
 
 model GameSession {
-  id         String   @id @default(uuid())
-  type       String   @default("TIC_TAC_TOE")
-  player1Id  String
-  player2Id  String?
-  player1    User     @relation("Player1", fields: [player1Id], references: [id])
-  player2    User?    @relation("Player2", fields: [player2Id], references: [id])
-  boardState Json?
-  status     String   @default("WAITING") // WAITING, PLAYING, FINISHED
-  winnerId   String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id           String       @id @default(uuid())
+  /// Type of game played
+  type         GameType     @default(TIC_TAC_TOE)
+  player1Id    String
+  player2Id    String?
+  player1      User         @relation("Player1", fields: [player1Id], references: [id])
+  player2      User?        @relation("Player2", fields: [player2Id], references: [id])
+  /// Board state JSON for TIC_TAC_TOE, null for single-player games
+  boardState   Json?
+  status       GameStatus   @default(WAITING)
+  winnerId     String?
+  /// Who the player played against (only relevant for TIC_TAC_TOE)
+  opponentType OpponentType?
+  /// Final score for PERKIE_JUMP single-player sessions
+  score        Int?
+  /// SHA-256 hash for server-side score validation (PERKIE_JUMP)
+  securityHash String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
   @@map("game_sessions")
 }
 
 model RedemptionCode {
-  id        String   @id @default(uuid())
-  code      String   @unique
+  id        String    @id @default(uuid())
+  code      String    @unique
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  createdAt DateTime @default(now())
+  user      User      @relation(fields: [userId], references: [id])
+  createdAt DateTime  @default(now())
   expiresAt DateTime
-  used      Boolean  @default(false)
+  used      Boolean   @default(false)
   usedAt    DateTime?
   usedBy    String?
 
@@ -109,21 +134,21 @@ model RedemptionCode {
 }
 
 model Order {
-  id         String      @id @default(uuid())
-  userId     String
-  user       User        @relation(fields: [userId], references: [id])
-  locationId String
-  location   Location    @relation(fields: [locationId], references: [id])
-  status     String      @default("PENDING")
-  totalPrice Decimal     @db.Decimal(10, 2)
-  paymentMethod String   @default("cash")
-  pickupMinutes Int      @default(10)
-  deliveryType String    @default("pickup")
-  shippingAddr String?
-  phone        String?
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
-  items      OrderItem[]
+  id            String      @id @default(uuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id])
+  locationId    String
+  location      Location    @relation(fields: [locationId], references: [id])
+  status        String      @default("PENDING")
+  totalPrice    Decimal     @db.Decimal(10, 2)
+  paymentMethod String      @default("cash")
+  pickupMinutes Int         @default(10)
+  deliveryType  String      @default("pickup")
+  shippingAddr  String?
+  phone         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  items         OrderItem[]
 
   @@map("orders")
 }

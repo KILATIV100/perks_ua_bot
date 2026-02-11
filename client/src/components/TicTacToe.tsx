@@ -1,300 +1,372 @@
-import { useState, useEffect } from 'react';
+/**
+ * Tic-Tac-Toe Component
+ *
+ * Modes:
+ *  - PvP (Local): two players on the same device
+ *  - PvE (vs Перкі): player vs unbeatable minimax AI
+ *
+ * Game logic runs entirely on the client.
+ * After a PvE match the result is submitted to /api/games/submit-score
+ * (conceptually; actual TicTacToe scoring uses the Socket.IO multiplayer path).
+ */
+
+import { useState, useEffect, useCallback } from 'react';
+
+// ---------------------------------------------------------------------------
+// Types & constants
+// ---------------------------------------------------------------------------
+
+type CellValue = 'X' | 'O' | null;
+type GameMode = 'pvp' | 'pve';
+type GameResult = 'X' | 'O' | 'draw' | null;
+
+interface Scores {
+  player1: number;
+  player2: number;
+  draws: number;
+}
+
+interface Theme {
+  bgColor: string;
+  textColor: string;
+  hintColor: string;
+  buttonColor: string;
+  buttonTextColor: string;
+  secondaryBgColor: string;
+}
 
 interface TicTacToeProps {
   mode?: 'online' | 'offline';
-  theme: {
-    bgColor: string;
-    textColor: string;
-    hintColor: string;
-    buttonColor: string;
-    buttonTextColor: string;
-    secondaryBgColor: string;
-  };
+  theme: Theme;
 }
 
-type CellValue = 'X' | 'O' | null;
-type Mode = 'local' | 'ai';
+const WIN_LINES = [
+  [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
+  [0, 3, 6], [1, 4, 7], [2, 5, 8], // cols
+  [0, 4, 8], [2, 4, 6],             // diagonals
+] as const;
 
-const scoreLabelStyle = (color: string) => ({
-  color,
-});
+// ---------------------------------------------------------------------------
+// Pure game logic (no React deps)
+// ---------------------------------------------------------------------------
+
+function checkWinner(board: CellValue[]): CellValue {
+  for (const [a, b, c] of WIN_LINES) {
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+      return board[a];
+    }
+  }
+  return null;
+}
+
+function getWinningLine(board: CellValue[]): readonly [number, number, number] | null {
+  for (const line of WIN_LINES) {
+    const [a, b, c] = line;
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) return line;
+  }
+  return null;
+}
+
+function isBoardFull(board: CellValue[]): boolean {
+  return board.every((c) => c !== null);
+}
+
+/**
+ * Minimax with alpha-beta pruning.
+ * AI plays as 'O', human plays as 'X'.
+ * Returns a score: positive = AI advantage, negative = human advantage.
+ */
+function minimax(
+  board: CellValue[],
+  depth: number,
+  isMaximizing: boolean,
+  alpha: number,
+  beta: number,
+): number {
+  const winner = checkWinner(board);
+  if (winner === 'O') return 10 - depth;  // AI wins (prefer faster wins)
+  if (winner === 'X') return depth - 10;  // Human wins
+  if (isBoardFull(board)) return 0;       // Draw
+
+  if (isMaximizing) {
+    let best = -Infinity;
+    for (let i = 0; i < 9; i++) {
+      if (board[i] === null) {
+        board[i] = 'O';
+        best = Math.max(best, minimax(board, depth + 1, false, alpha, beta));
+        board[i] = null;
+        alpha = Math.max(alpha, best);
+        if (beta <= alpha) break; // β cut-off
+      }
+    }
+    return best;
+  } else {
+    let best = Infinity;
+    for (let i = 0; i < 9; i++) {
+      if (board[i] === null) {
+        board[i] = 'X';
+        best = Math.min(best, minimax(board, depth + 1, true, alpha, beta));
+        board[i] = null;
+        beta = Math.min(beta, best);
+        if (beta <= alpha) break; // α cut-off
+      }
+    }
+    return best;
+  }
+}
+
+/**
+ * Return the best move index for the AI ('O').
+ * Unbeatable — will always win or draw.
+ */
+function getBestAiMove(board: CellValue[]): number {
+  let bestScore = -Infinity;
+  let bestMove = -1;
+  for (let i = 0; i < 9; i++) {
+    if (board[i] === null) {
+      board[i] = 'O';
+      const score = minimax(board, 0, false, -Infinity, Infinity);
+      board[i] = null;
+      if (score > bestScore) {
+        bestScore = score;
+        bestMove = i;
+      }
+    }
+  }
+  return bestMove;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export function TicTacToe({ theme, mode = 'online' }: TicTacToeProps) {
-  const [selectedMode, setSelectedMode] = useState<Mode>('local');
-  const [localBoard, setLocalBoard] = useState<CellValue[]>(Array(9).fill(null));
-  const [localTurn, setLocalTurn] = useState<'X' | 'O'>('X');
-  const [localWinner, setLocalWinner] = useState<'X' | 'O' | 'draw' | null>(null);
-  const [localScores, setLocalScores] = useState({ player1: 0, player2: 0, draws: 0 });
-  const [aiBoard, setAiBoard] = useState<CellValue[]>(Array(9).fill(null));
-  const [aiWinner, setAiWinner] = useState<'X' | 'O' | 'draw' | null>(null);
+  const [gameMode, setGameMode] = useState<GameMode>('pve');
+  const [board, setBoard] = useState<CellValue[]>(Array(9).fill(null));
+  const [turn, setTurn] = useState<'X' | 'O'>('X');
+  const [result, setResult] = useState<GameResult>(null);
+  const [scores, setScores] = useState<Scores>({ player1: 0, player2: 0, draws: 0 });
   const [aiThinking, setAiThinking] = useState(false);
-  const [aiScores, setAiScores] = useState({ player: 0, ai: 0, draws: 0 });
+  const [winLine, setWinLine] = useState<readonly [number, number, number] | null>(null);
 
-  useEffect(() => {
-    setSelectedMode('local');
-  }, [mode]);
+  // Sync with external mode prop
+  useEffect(() => { setGameMode('pve'); }, [mode]);
 
-  const checkWinner = (board: CellValue[]): 'X' | 'O' | null => {
-    const lines = [
-      [0, 1, 2],
-      [3, 4, 5],
-      [6, 7, 8],
-      [0, 3, 6],
-      [1, 4, 7],
-      [2, 5, 8],
-      [0, 4, 8],
-      [2, 4, 6],
-    ];
-
-    for (const line of lines) {
-      const [a, b, c] = line;
-      if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-        return board[a];
-      }
-    }
-
-    return null;
-  };
-
-  const isBoardFull = (board: CellValue[]) => board.every(cell => cell !== null);
-
-  const resetLocalGame = () => {
-    setLocalBoard(Array(9).fill(null));
-    setLocalTurn('X');
-    setLocalWinner(null);
-  };
-
-  const resetAiGame = () => {
-    setAiBoard(Array(9).fill(null));
-    setAiWinner(null);
+  const resetGame = useCallback(() => {
+    setBoard(Array(9).fill(null));
+    setTurn('X');
+    setResult(null);
+    setWinLine(null);
     setAiThinking(false);
-  };
+  }, []);
 
-  const handleLocalMove = (index: number) => {
-    if (localWinner || localBoard[index]) return;
-    const nextBoard = [...localBoard];
-    nextBoard[index] = localTurn;
-    const winner = checkWinner(nextBoard);
-    if (winner) {
-      setLocalWinner(winner);
-      setLocalScores(prev => ({
-        ...prev,
-        player1: winner === 'X' ? prev.player1 + 1 : prev.player1,
-        player2: winner === 'O' ? prev.player2 + 1 : prev.player2,
-      }));
-    } else if (isBoardFull(nextBoard)) {
-      setLocalWinner('draw');
-      setLocalScores(prev => ({ ...prev, draws: prev.draws + 1 }));
-    } else {
-      setLocalTurn(prev => (prev === 'X' ? 'O' : 'X'));
-    }
-    setLocalBoard(nextBoard);
-  };
-
-  const evaluateMove = (board: CellValue[], index: number) => {
-    const testBoard = [...board];
-    testBoard[index] = 'O';
-    if (checkWinner(testBoard) === 'O') return 100;
-    testBoard[index] = 'X';
-    if (checkWinner(testBoard) === 'X') return 90;
-    testBoard[index] = 'O';
-    return 10;
-  };
-
-  const getAiMove = (board: CellValue[]) => {
-    const emptyCells = board.map((cell, index) => (cell === null ? index : null)).filter((val): val is number => val !== null);
-    if (!emptyCells.length) return null;
-    if (Math.random() < 0.7) {
-      const scored = emptyCells.map(index => ({ index, score: evaluateMove(board, index) }));
-      scored.sort((a, b) => b.score - a.score);
-      return scored[0].index;
-    }
-    return emptyCells[Math.floor(Math.random() * emptyCells.length)];
-  };
-
-  const handleAiMove = (index: number) => {
-    if (aiWinner || aiThinking || aiBoard[index]) return;
-    const nextBoard = [...aiBoard];
-    nextBoard[index] = 'X';
-    const winner = checkWinner(nextBoard);
-    if (winner) {
-      setAiWinner('X');
-      setAiScores(prev => ({ ...prev, player: prev.player + 1 }));
-      setAiBoard(nextBoard);
-      return;
-    }
-    if (isBoardFull(nextBoard)) {
-      setAiWinner('draw');
-      setAiScores(prev => ({ ...prev, draws: prev.draws + 1 }));
-      setAiBoard(nextBoard);
-      return;
-    }
-
+  // AI makes its move after a short "thinking" delay
+  const doAiMove = useCallback((currentBoard: CellValue[]) => {
     setAiThinking(true);
-    setAiBoard(nextBoard);
     setTimeout(() => {
-      const aiMove = getAiMove(nextBoard);
-      if (aiMove === null) {
-        setAiThinking(false);
-        return;
+      const aiIdx = getBestAiMove(currentBoard);
+      if (aiIdx === -1) { setAiThinking(false); return; }
+
+      const next = [...currentBoard];
+      next[aiIdx] = 'O';
+
+      const winner = checkWinner(next);
+      const line = getWinningLine(next);
+      const full = isBoardFull(next);
+
+      setBoard(next);
+      setWinLine(line);
+
+      if (winner) {
+        setResult(winner);
+        setScores((prev) => ({
+          ...prev,
+          player1: winner === 'X' ? prev.player1 + 1 : prev.player1,
+          player2: winner === 'O' ? prev.player2 + 1 : prev.player2,
+        }));
+      } else if (full) {
+        setResult('draw');
+        setScores((prev) => ({ ...prev, draws: prev.draws + 1 }));
+      } else {
+        setTurn('X');
       }
-      const boardAfterAi = [...nextBoard];
-      boardAfterAi[aiMove] = 'O';
-      const aiWinnerResult = checkWinner(boardAfterAi);
-      if (aiWinnerResult) {
-        setAiWinner('O');
-        setAiScores(prev => ({ ...prev, ai: prev.ai + 1 }));
-      } else if (isBoardFull(boardAfterAi)) {
-        setAiWinner('draw');
-        setAiScores(prev => ({ ...prev, draws: prev.draws + 1 }));
-      }
-      setAiBoard(boardAfterAi);
       setAiThinking(false);
-    }, 600);
-  };
+    }, 450); // brief "thinking" pause for UX
+  }, []);
 
-  const renderCellValue = (value: CellValue) => value ?? '';
+  const handleCellClick = useCallback(
+    (index: number) => {
+      if (result || board[index] !== null) return;
+      if (gameMode === 'pve' && aiThinking) return;
+      if (gameMode === 'pve' && turn === 'O') return; // AI's turn
 
-  const getLocalStatus = () => {
-    if (localWinner) {
-      if (localWinner === 'draw') return 'Нічия! 🤝';
-      return `${localWinner === 'X' ? 'Гравець 1' : 'Гравець 2'} перемагає! 🎉`;
+      const next = [...board];
+      next[index] = turn;
+
+      const winner = checkWinner(next);
+      const line = getWinningLine(next);
+      const full = isBoardFull(next);
+
+      setBoard(next);
+      setWinLine(line);
+
+      if (winner) {
+        setResult(winner);
+        setScores((prev) => ({
+          ...prev,
+          player1: winner === 'X' ? prev.player1 + 1 : prev.player1,
+          player2: winner === 'O' ? prev.player2 + 1 : prev.player2,
+        }));
+      } else if (full) {
+        setResult('draw');
+        setScores((prev) => ({ ...prev, draws: prev.draws + 1 }));
+      } else {
+        const nextTurn: 'X' | 'O' = turn === 'X' ? 'O' : 'X';
+        setTurn(nextTurn);
+        if (gameMode === 'pve' && nextTurn === 'O') {
+          doAiMove(next);
+        }
+      }
+    },
+    [board, turn, result, gameMode, aiThinking, doAiMove],
+  );
+
+  // Status line
+  const statusText = (): string => {
+    if (result === 'draw') return 'Нічия! 🤝';
+    if (result) {
+      if (gameMode === 'pve') {
+        return result === 'X' ? 'Ти переміг! 🎉' : 'Перкі переміг! 🤖☕';
+      }
+      return `${result === 'X' ? 'Гравець 1' : 'Гравець 2'} переміг! 🎉`;
     }
-    return `${localTurn === 'X' ? 'Гравець 1' : 'Гравець 2'} (${localTurn}) ходить`;
+    if (gameMode === 'pve') {
+      if (aiThinking) return 'Перкі думає...☕';
+      return 'Твій хід (X)';
+    }
+    return `${turn === 'X' ? 'Гравець 1' : 'Гравець 2'} (${turn}) ходить`;
   };
 
-  const getAiStatus = () => {
-    if (aiWinner) {
-      if (aiWinner === 'draw') return 'Нічия! 🤝';
-      return aiWinner === 'X' ? 'Ти перемагаєш! 🎉' : 'AI перемагає! 🤖';
-    }
-    if (aiThinking) return 'AI думає...';
-    return 'Твій хід (X)';
+  const cellColor = (cell: CellValue) => {
+    if (cell === 'X') return '#667eea';
+    if (cell === 'O') return '#f59e0b';
+    return theme.textColor;
   };
+
+  const isCellHighlighted = (index: number) =>
+    winLine !== null && winLine.includes(index as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8);
+
+  const p2Label = gameMode === 'pve' ? 'Перкі' : 'Гравець 2';
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <header className="text-center">
-        <h1 className="text-2xl font-bold mb-2" style={{ color: theme.textColor }}>Хрестики-Нулики</h1>
-        <p className="text-sm" style={{ color: theme.hintColor }}>Виберіть режим гри</p>
+        <h1 className="text-2xl font-bold mb-1" style={{ color: theme.textColor }}>
+          Хрестики-Нулики
+        </h1>
+        <p className="text-sm" style={{ color: theme.hintColor }}>
+          Виберіть режим гри
+        </p>
       </header>
 
-      <main className="space-y-6">
-        <div className="flex gap-3 justify-center flex-wrap">
-          {([
-            { id: 'local', label: '🎮 Локально (2 гравців)' },
-            { id: 'ai', label: '🤖 проти AI' },
-          ] as const).map((entry) => (
+      {/* Mode selector */}
+      <div className="flex gap-3 justify-center">
+        {([
+          { id: 'pve', label: '🤖 vs Перкі' },
+          { id: 'pvp', label: '🎮 2 гравці' },
+        ] as const).map((m) => (
+          <button
+            key={m.id}
+            onClick={() => { setGameMode(m.id); resetGame(); }}
+            className="px-4 py-2 rounded-xl text-sm font-medium transition-all"
+            style={{
+              backgroundColor: gameMode === m.id ? theme.buttonColor : theme.secondaryBgColor,
+              color: gameMode === m.id ? theme.buttonTextColor : theme.textColor,
+            }}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Score bar */}
+      <div
+        className="rounded-2xl p-4"
+        style={{ backgroundColor: theme.secondaryBgColor }}
+      >
+        <div className="flex justify-center gap-10 mb-4">
+          <div className="text-center">
+            <div className="text-xs mb-1" style={{ color: theme.hintColor }}>
+              {gameMode === 'pve' ? 'Ти' : 'Гравець 1'}
+            </div>
+            <div className="text-2xl font-bold" style={{ color: '#667eea' }}>
+              {scores.player1}
+            </div>
+          </div>
+          <div className="text-center">
+            <div className="text-xs mb-1" style={{ color: theme.hintColor }}>Нічиї</div>
+            <div className="text-2xl font-bold" style={{ color: theme.textColor }}>
+              {scores.draws}
+            </div>
+          </div>
+          <div className="text-center">
+            <div className="text-xs mb-1" style={{ color: theme.hintColor }}>
+              {p2Label}
+            </div>
+            <div className="text-2xl font-bold" style={{ color: '#f59e0b' }}>
+              {scores.player2}
+            </div>
+          </div>
+        </div>
+
+        {/* Status */}
+        <p
+          className="text-center text-sm font-medium mb-4"
+          style={{ color: result ? theme.buttonColor : theme.textColor }}
+        >
+          {statusText()}
+        </p>
+
+        {/* Board */}
+        <div className="grid grid-cols-3 gap-2 w-full max-w-[288px] mx-auto">
+          {board.map((cell, i) => (
             <button
-              key={entry.id}
-              onClick={() => setSelectedMode(entry.id)}
-              className="px-4 py-2 rounded-xl text-sm font-medium transition-all"
+              key={i}
+              className="aspect-square w-full rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
+              onClick={() => handleCellClick(i)}
+              disabled={!!result || cell !== null || aiThinking || (gameMode === 'pve' && turn === 'O')}
               style={{
-                backgroundColor: selectedMode === entry.id ? theme.buttonColor : theme.secondaryBgColor,
-                color: selectedMode === entry.id ? theme.buttonTextColor : theme.textColor,
+                backgroundColor: isCellHighlighted(i)
+                  ? `${theme.buttonColor}40`
+                  : theme.bgColor,
+                color: cellColor(cell),
+                border: isCellHighlighted(i)
+                  ? `2px solid ${theme.buttonColor}`
+                  : `2px solid ${theme.hintColor}25`,
+                transform: isCellHighlighted(i) ? 'scale(1.05)' : undefined,
               }}
             >
-              {entry.label}
+              {cell ?? ''}
             </button>
           ))}
         </div>
 
-        {selectedMode === 'local' && (
-          <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
-            <div className="text-center mb-4 text-sm font-medium" style={{ color: theme.textColor }}>
-              {getLocalStatus()}
-            </div>
+        {/* New game button */}
+        <button
+          className="mt-5 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
+          style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+          onClick={resetGame}
+        >
+          Нова гра
+        </button>
+      </div>
 
-            <div className="flex justify-center gap-8 mb-6">
-              <div className="text-center">
-                <div style={scoreLabelStyle(theme.hintColor)}>Гравець 1</div>
-                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{localScores.player1}</div>
-              </div>
-              <div className="text-center">
-                <div style={scoreLabelStyle(theme.hintColor)}>Нічиї</div>
-                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{localScores.draws}</div>
-              </div>
-              <div className="text-center">
-                <div style={scoreLabelStyle(theme.hintColor)}>Гравець 2</div>
-                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{localScores.player2}</div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3 w-full max-w-[300px] mx-auto">
-              {localBoard.map((cell, index) => (
-                <button
-                  key={`local-${index}`}
-                  className="aspect-square w-full rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
-                  onClick={() => handleLocalMove(index)}
-                  disabled={!!localWinner || cell !== null}
-                  style={{
-                    backgroundColor: theme.secondaryBgColor,
-                    color: cell === 'X' ? '#667eea' : cell === 'O' ? '#764ba2' : theme.textColor,
-                    border: `2px solid ${theme.hintColor}20`,
-                  }}
-                >
-                  {renderCellValue(cell)}
-                </button>
-              ))}
-            </div>
-
-            <button
-              className="mt-6 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
-              style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
-              onClick={resetLocalGame}
-            >
-              Нова гра
-            </button>
-          </div>
-        )}
-
-        {selectedMode === 'ai' && (
-          <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
-            <div className="text-center mb-4 text-sm font-medium" style={{ color: theme.textColor }}>
-              {getAiStatus()}
-            </div>
-            <div className="flex justify-center gap-8 mb-6">
-              <div className="text-center">
-                <div style={scoreLabelStyle(theme.hintColor)}>Ти</div>
-                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{aiScores.player}</div>
-              </div>
-              <div className="text-center">
-                <div style={scoreLabelStyle(theme.hintColor)}>Нічиї</div>
-                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{aiScores.draws}</div>
-              </div>
-              <div className="text-center">
-                <div style={scoreLabelStyle(theme.hintColor)}>AI</div>
-                <div className="text-2xl font-bold" style={{ color: theme.textColor }}>{aiScores.ai}</div>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3 w-full max-w-[300px] mx-auto">
-              {aiBoard.map((cell, index) => (
-                <button
-                  key={`ai-${index}`}
-                  className="aspect-square w-full rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
-                  onClick={() => handleAiMove(index)}
-                  disabled={aiThinking || !!aiWinner || cell !== null}
-                  style={{
-                    backgroundColor: theme.secondaryBgColor,
-                    color: cell === 'X' ? '#667eea' : cell === 'O' ? '#764ba2' : theme.textColor,
-                    border: `2px solid ${theme.hintColor}20`,
-                  }}
-                >
-                  {renderCellValue(cell)}
-                </button>
-              ))}
-            </div>
-            <button
-              className="mt-6 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
-              style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
-              onClick={resetAiGame}
-            >
-              Нова гра
-            </button>
-          </div>
-        )}
-
-      </main>
+      {/* PvE hint */}
+      {gameMode === 'pve' && (
+        <p className="text-center text-xs" style={{ color: theme.hintColor }}>
+          ☕ Перкі використовує мінімакс — перемогти неможливо!
+        </p>
+      )}
     </div>
   );
 }
