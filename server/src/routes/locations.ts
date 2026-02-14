@@ -11,11 +11,11 @@ export async function locationRoutes(
       select: {
         id: true,
         name: true,
-        lat: true,
-        long: true,
+        latitude: true,
+        longitude: true,
         address: true,
-        status: true,
-        canPreorder: true,
+        isActive: true,
+        hasOrdering: true,
       },
     });
 
@@ -31,11 +31,11 @@ export async function locationRoutes(
       select: {
         id: true,
         name: true,
-        lat: true,
-        long: true,
+        latitude: true,
+        longitude: true,
         address: true,
-        status: true,
-        canPreorder: true,
+        isActive: true,
+        hasOrdering: true,
       },
     });
 

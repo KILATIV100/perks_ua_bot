@@ -1,12 +1,11 @@
 /**
- * Games Module — Socket.IO Event Handlers
+ * Games Module — Socket.IO Event Handlers (v2.0)
  *
  * Handles real-time TIC_TAC_TOE gameplay:
  *  - game:join   — subscribe to a game room
  *  - game:move   — make a move (also aliased as make_move)
  *
- * Points are awarded to the winner (+2 per win, max 5 pts/day from game wins).
- * The daily budget uses Kyiv-timezone day start for consistency.
+ * Points: +2 per win, tracked via DailyGameLimit (max 10 pts/day from TTT wins).
  */
 
 import type { Server as SocketIOServer } from 'socket.io';
@@ -15,23 +14,16 @@ import { getKyivDateString } from '../../shared/utils/timezone.js';
 
 type CellValue = 'X' | 'O' | null;
 
-// ---------------------------------------------------------------------------
-// Win-condition helpers
-// ---------------------------------------------------------------------------
+const TTT_WIN_POINTS = 2;
+const TTT_MAX_DAILY_POINTS = 10;
+
+// ── Win-condition helpers ────────────────────────────────────────────────
 
 function checkWinner(board: CellValue[][]): CellValue {
   const lines: [number, number][][] = [
-    // rows
-    [[0,0],[0,1],[0,2]],
-    [[1,0],[1,1],[1,2]],
-    [[2,0],[2,1],[2,2]],
-    // cols
-    [[0,0],[1,0],[2,0]],
-    [[0,1],[1,1],[2,1]],
-    [[0,2],[1,2],[2,2]],
-    // diagonals
-    [[0,0],[1,1],[2,2]],
-    [[0,2],[1,1],[2,0]],
+    [[0,0],[0,1],[0,2]], [[1,0],[1,1],[1,2]], [[2,0],[2,1],[2,2]],
+    [[0,0],[1,0],[2,0]], [[0,1],[1,1],[2,1]], [[0,2],[1,2],[2,2]],
+    [[0,0],[1,1],[2,2]], [[0,2],[1,1],[2,0]],
   ];
   for (const [[r1,c1],[r2,c2],[r3,c3]] of lines) {
     const a = board[r1][c1];
@@ -44,9 +36,7 @@ function isBoardFull(board: CellValue[][]): boolean {
   return board.every(row => row.every(cell => cell !== null));
 }
 
-// ---------------------------------------------------------------------------
-// Setup
-// ---------------------------------------------------------------------------
+// ── Setup ────────────────────────────────────────────────────────────────
 
 export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void {
   io.on('connection', (socket) => {
@@ -73,7 +63,6 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
 
         const board = game.boardState as CellValue[][];
 
-        // Validate bounds
         if (data.row < 0 || data.row > 2 || data.col < 0 || data.col > 2) {
           socket.emit('game:error', { message: 'Invalid position' });
           return;
@@ -90,12 +79,20 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
           return;
         }
 
-        // Turn validation: player1 = X (goes first), player2 = O
-        const moveCount = board.flat().filter(c => c !== null).length;
-        const isXTurn = moveCount % 2 === 0;
-        if ((isPlayer1 && !isXTurn) || (isPlayer2 && isXTurn)) {
+        // Turn validation using currentTurn field
+        if (game.currentTurn && game.currentTurn !== data.playerId) {
           socket.emit('game:error', { message: 'Not your turn' });
           return;
+        }
+
+        // Fallback turn validation by move count
+        if (!game.currentTurn) {
+          const moveCount = board.flat().filter(c => c !== null).length;
+          const isXTurn = moveCount % 2 === 0;
+          if ((isPlayer1 && !isXTurn) || (isPlayer2 && isXTurn)) {
+            socket.emit('game:error', { message: 'Not your turn' });
+            return;
+          }
         }
 
         const symbol: CellValue = isPlayer1 ? 'X' : 'O';
@@ -103,52 +100,69 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
 
         const winner = checkWinner(board);
         const full = isBoardFull(board);
-
         const status: 'PLAYING' | 'FINISHED' = (winner || full) ? 'FINISHED' : 'PLAYING';
         const winnerId: string | null = winner
           ? (winner === 'X' ? game.player1Id : game.player2Id ?? null)
           : null;
 
+        const nextTurn = isPlayer1 ? game.player2Id : game.player1Id;
+
         const updatedGame = await prisma.gameSession.update({
           where: { id: data.gameId },
-          data: { boardState: board, status, winnerId },
+          data: {
+            boardState: board,
+            status,
+            winnerId,
+            currentTurn: status === 'FINISHED' ? null : nextTurn,
+          },
           include: {
             player1: { select: { id: true, firstName: true, telegramId: true } },
             player2: { select: { id: true, firstName: true, telegramId: true } },
           },
         });
 
-        // Award points to winner (max 5 pts/day from game wins)
+        // Award points via DailyGameLimit
         if (status === 'FINISHED' && winnerId) {
-          const kyivDateStr = getKyivDateString();
-          const [y, m, d] = kyivDateStr.split('-').map(Number);
-          const dayStart = new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
+          const todayKyiv = getKyivDateString();
 
-          const todayWins = await prisma.gameSession.count({
-            where: {
-              winnerId,
-              type: 'TIC_TAC_TOE',
-              status: 'FINISHED',
-              updatedAt: { gte: dayStart },
-              id: { not: data.gameId },
-            },
+          const limit = await prisma.dailyGameLimit.upsert({
+            where: { userId_gameType_date: { userId: winnerId, gameType: 'TIC_TAC_TOE', date: todayKyiv } },
+            update: {},
+            create: { userId: winnerId, gameType: 'TIC_TAC_TOE', date: todayKyiv, pointsEarned: 0 },
           });
 
-          const pointsEarnedToday = todayWins * 2;
-          if (pointsEarnedToday < 5) {
-            const pointsToAward = Math.min(2, 5 - pointsEarnedToday);
+          const remaining = Math.max(0, TTT_MAX_DAILY_POINTS - limit.pointsEarned);
+          const pointsToAward = Math.min(TTT_WIN_POINTS, remaining);
+
+          if (pointsToAward > 0) {
+            await prisma.dailyGameLimit.update({
+              where: { id: limit.id },
+              data: { pointsEarned: { increment: pointsToAward } },
+            });
             await prisma.user.update({
               where: { id: winnerId },
               data: { points: { increment: pointsToAward } },
             });
-            console.log(`[Game] +${pointsToAward} pts → winner ${winnerId} (${pointsEarnedToday + pointsToAward}/5 today)`);
+            console.log(`[Game] +${pointsToAward} pts → winner ${winnerId} (${limit.pointsEarned + pointsToAward}/${TTT_MAX_DAILY_POINTS} today)`);
           }
+
+          // Record GameScore
+          await prisma.gameScore.create({
+            data: {
+              userId: winnerId,
+              gameType: 'TIC_TAC_TOE',
+              score: 1, // 1 = win
+              pointsEarned: pointsToAward,
+              sessionId: data.gameId,
+            },
+          });
         }
 
         io.to(`game:${data.gameId}`).emit('game:update', {
           board,
           status,
           winnerId,
+          currentTurn: updatedGame.currentTurn,
           lastMove: { row: data.row, col: data.col, symbol },
           player1: updatedGame.player1,
           player2: updatedGame.player2,

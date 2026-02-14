@@ -180,10 +180,10 @@ export async function adminRoutes(
         });
       }
 
-      if (redemptionCode.used) {
+      if (redemptionCode.usedAt) {
         return reply.status(400).send({
           error: 'CodeAlreadyUsed',
-          message: `Код вже використано ${redemptionCode.usedAt ? new Date(redemptionCode.usedAt).toLocaleString('uk-UA') : ''}.`,
+          message: `Код вже використано ${new Date(redemptionCode.usedAt).toLocaleString('uk-UA')}.`,
         });
       }
 
@@ -199,9 +199,8 @@ export async function adminRoutes(
       await app.prisma.redemptionCode.update({
         where: { id: redemptionCode.id },
         data: {
-          used: true,
           usedAt: now,
-          usedBy: body.adminTelegramId,
+          usedByAdmin: { connect: { id: admin.id } },
         },
       });
 
@@ -258,6 +257,9 @@ export async function adminRoutes(
       const now = new Date();
       const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
+      // Today's date string in YYYY-MM-DD (Kyiv timezone)
+      const todayString = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' });
+
       // Count new users in last 24h
       const newUsersCount = await app.prisma.user.count({
         where: {
@@ -265,17 +267,16 @@ export async function adminRoutes(
         },
       });
 
-      // Count spins in last 24h
+      // Count spins today (lastSpinDate is YYYY-MM-DD string)
       const spinsCount = await app.prisma.user.count({
         where: {
-          lastSpin: { gte: yesterday },
+          lastSpinDate: todayString,
         },
       });
 
       // Count verified codes (free drinks) in last 24h
       const freeDrinksCount = await app.prisma.redemptionCode.count({
         where: {
-          used: true,
           usedAt: { gte: yesterday },
         },
       });
