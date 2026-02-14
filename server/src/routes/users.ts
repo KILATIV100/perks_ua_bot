@@ -197,7 +197,6 @@ export async function userRoutes(
           firstName: true,
           points: true,
           totalSpins: true,
-          lastSpin: true,
           lastSpinDate: true,
           role: true,
           createdAt: true,
@@ -272,15 +271,15 @@ export async function userRoutes(
         // Get all active locations with coordinates
         const activeLocations = await app.prisma.location.findMany({
           where: {
-            status: 'active',
-            lat: { not: null },
-            long: { not: null },
+            isActive: true,
+            latitude: { not: null },
+            longitude: { not: null },
           },
           select: {
             id: true,
             name: true,
-            lat: true,
-            long: true,
+            latitude: true,
+            longitude: true,
           },
         });
 
@@ -289,12 +288,12 @@ export async function userRoutes(
         let isNearby = false;
 
         for (const location of activeLocations) {
-          if (location.lat !== null && location.long !== null) {
+          if (location.latitude !== null && location.longitude !== null) {
             const distance = calculateDistance(
               body.userLat,
               body.userLng,
-              location.lat,
-              location.long
+              location.latitude,
+              location.longitude
             );
 
             app.log.info(`[Distance Check] ${location.name}: ${Math.round(distance)}m`);
@@ -348,13 +347,12 @@ export async function userRoutes(
       // Random reward
       const reward = SPIN_REWARDS[Math.floor(Math.random() * SPIN_REWARDS.length)];
 
-      // Update user with lastSpin and lastSpinDate
+      // Update user with lastSpinDate
       const updatedUser = await app.prisma.user.update({
         where: { telegramId: body.telegramId },
         data: {
           points: { increment: reward },
           totalSpins: { increment: 1 },
-          lastSpin: now,
           lastSpinDate: todayString,
         },
         select: {
@@ -362,7 +360,6 @@ export async function userRoutes(
           telegramId: true,
           points: true,
           totalSpins: true,
-          lastSpin: true,
           firstName: true,
         },
       });
@@ -522,7 +519,7 @@ export async function userRoutes(
           firstName: true,
           points: true,
           totalSpins: true,
-          lastSpin: true,
+          lastSpinDate: true,
           createdAt: true,
         },
       });
