@@ -26,8 +26,11 @@ until npx prisma db push --skip-generate --accept-data-loss; do
   sleep "$WAIT_SEC"
 done
 
-echo "[start] Schema applied. Running seed..."
-npx prisma db seed
+echo "[start] Schema applied successfully."
+
+# Seed is optional — the server auto-seeds on startup if tables are empty.
+echo "[start] Running seed (optional)..."
+npx prisma db seed || echo "[start] Seed skipped or failed (non-fatal, server will auto-seed)."
 
 echo "[start] Starting server..."
 exec node dist/index.js
