@@ -133,6 +133,11 @@ async function connectRedis(): Promise<void> {
 async function start(): Promise<void> {
   try {
     await app.ready();
+
+    // Debug: print all registered routes
+    console.log('[routes] Registered routes:');
+    console.log(app.printRoutes({ commonPrefix: false }));
+
     if (app.io) {
       setupGameSockets(app.io, prisma);
     }
