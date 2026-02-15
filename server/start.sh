@@ -11,6 +11,13 @@ WAIT_SEC=4
 
 echo "[start] Waiting for PostgreSQL to be reachable..."
 
+# Baseline: if the DB already has tables (from prior `prisma db push`) but no
+# _prisma_migrations table, mark the init migration as already applied so that
+# `migrate deploy` doesn't try to re-create existing tables (P3005).
+# This is safe to run repeatedly — once the migration is recorded it's a no-op.
+echo "[start] Baselining initial migration (safe no-op if already done)..."
+npx prisma migrate resolve --applied "20250214000000_init" 2>/dev/null || true
+
 until npx prisma migrate deploy; do
   RETRY=$((RETRY + 1))
 
