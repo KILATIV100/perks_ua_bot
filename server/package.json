@@ -4,9 +4,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "prisma generate && tsc",
-    "start": "sh start.sh",
+    "start": "npx prisma db push --accept-data-loss && node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio"
