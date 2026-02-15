@@ -1,6 +1,6 @@
 #!/bin/sh
 # Railway startup script.
-# Waits for PostgreSQL to be reachable before running migrations and starting the server.
+# Waits for PostgreSQL to be reachable, then applies migrations and starts the server.
 # Services in Railway start concurrently — the DB may not be ready immediately.
 
 set -e
@@ -11,7 +11,7 @@ WAIT_SEC=4
 
 echo "[start] Waiting for PostgreSQL to be reachable..."
 
-until npx prisma db push --skip-generate --accept-data-loss; do
+until npx prisma migrate deploy; do
   RETRY=$((RETRY + 1))
 
   if [ "$RETRY" -ge "$MAX_RETRIES" ]; then
@@ -26,7 +26,7 @@ until npx prisma db push --skip-generate --accept-data-loss; do
   sleep "$WAIT_SEC"
 done
 
-echo "[start] Schema applied successfully."
+echo "[start] Migrations applied successfully."
 
 # Seed is optional — the server auto-seeds on startup if tables are empty.
 echo "[start] Running seed (optional)..."

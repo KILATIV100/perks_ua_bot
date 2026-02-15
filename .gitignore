@@ -14,9 +14,6 @@ build/
 .next/
 out/
 
-# Prisma
-server/prisma/migrations/
-
 # IDE
 .idea/
 .vscode/
