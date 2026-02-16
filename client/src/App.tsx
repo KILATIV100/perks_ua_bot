@@ -22,7 +22,41 @@ const API_URL = resolveApiUrl();
 const BOT_USERNAME = 'perkup_ua_bot';
 const KYIV_TIME_ZONE = 'Europe/Kyiv';
 
+// ── Token management ──────────────────────────────────────────────────────
+let accessToken: string | null = null;
+let refreshToken: string | null = null;
+
 const api = axios.create({ baseURL: API_URL });
+
+// Attach Authorization header when token is available
+api.interceptors.request.use((config) => {
+  if (accessToken) {
+    config.headers.Authorization = `Bearer ${accessToken}`;
+  }
+  return config;
+});
+
+// Auto-refresh on 401
+api.interceptors.response.use(
+  (res) => res,
+  async (error) => {
+    const original = error.config;
+    if (error.response?.status === 401 && refreshToken && !original._retry) {
+      original._retry = true;
+      try {
+        const { data } = await axios.post(`${API_URL}/api/auth/refresh`, { refreshToken });
+        accessToken = data.accessToken;
+        refreshToken = data.refreshToken;
+        original.headers.Authorization = `Bearer ${accessToken}`;
+        return api(original);
+      } catch {
+        accessToken = null;
+        refreshToken = null;
+      }
+    }
+    return Promise.reject(error);
+  },
+);
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('locations');
@@ -88,6 +122,25 @@ function App() {
   const syncUser = async () => {
     if (!telegramUser) return;
     try {
+      // Try JWT auth via Telegram initData first
+      const initData = WebApp.initData;
+      if (initData) {
+        try {
+          const { data } = await axios.post(`${API_URL}/api/auth/telegram`, {
+            initData,
+            startParam: startParam || undefined,
+          });
+          accessToken = data.accessToken;
+          refreshToken = data.refreshToken;
+          setAppUser(data.user);
+          checkSpinAvailability(data.user.lastSpinDate);
+          return;
+        } catch (authErr) {
+          console.warn('JWT auth failed, falling back to legacy sync:', authErr);
+        }
+      }
+
+      // Fallback: legacy sync for dev/testing (no Telegram context)
       const { data } = await api.post('/api/user/sync', {
         telegramId: String(telegramUser.id),
         username: telegramUser.username,
@@ -152,7 +205,7 @@ function App() {
     try {
       const urlParams = new URLSearchParams(window.location.search);
       const devMode = urlParams.get('dev') === 'true' || urlParams.get('admin') === 'true';
-      const { data } = await api.post('/api/user/spin', {
+      const { data } = await api.post('/api/loyalty/spin', {
         telegramId: String(telegramUser.id),
         userLat: lat,
         userLng: lng,
@@ -161,9 +214,9 @@ function App() {
 
       setAppUser((prev: any) => ({ ...prev, points: data.newBalance, totalSpins: (prev?.totalSpins || 0) + 1 }));
       setCanSpin(false);
-      setNextSpinAt(data.nextSpinAt || null);
+      setNextSpinAt(data.nextSpinAvailable || null);
 
-      return { reward: data.reward, newBalance: data.newBalance };
+      return { reward: data.prize?.value ?? 0, newBalance: data.newBalance };
     } catch (err: any) {
       const message = err?.response?.data?.message || 'Не вдалося крутнути колесо';
       return { error: err?.response?.data?.error || 'SpinError', message };
@@ -322,7 +375,11 @@ function App() {
                     )
                   )}
                   {funZoneGame === 'perky_jump' && (
-                    <PerkyJump />
+                    <PerkyJump
+                      apiUrl={API_URL}
+                      telegramId={telegramUser ? String(telegramUser.id) : undefined}
+                      onPointsEarned={(pts) => setAppUser((prev: any) => prev ? { ...prev, points: (prev.points || 0) + pts } : prev)}
+                    />
                   )}
                 </div>
               </div>
