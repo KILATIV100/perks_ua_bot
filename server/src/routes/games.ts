@@ -24,7 +24,7 @@ export async function gameRoutes(
   _opts: FastifyPluginOptions
 ): Promise<void> {
   // POST /api/games/create - Create a new game session
-  app.post('create', async (request, reply) => {
+  app.post('/create', async (request, reply) => {
     try {
       const body = createGameSchema.parse(request.body);
 
@@ -67,7 +67,7 @@ export async function gameRoutes(
   });
 
   // POST /api/games/join - Join an existing game session
-  app.post('join', async (request, reply) => {
+  app.post('/join', async (request, reply) => {
     try {
       const body = joinGameSchema.parse(request.body);
 
@@ -127,7 +127,7 @@ export async function gameRoutes(
   });
 
   // GET /api/games/:id - Get game state
-  app.get<{ Params: { id: string } }>(':id', async (request, reply) => {
+  app.get<{ Params: { id: string } }>('/:id', async (request, reply) => {
     try {
       const game = await app.prisma.gameSession.findUnique({
         where: { id: request.params.id },
@@ -149,7 +149,7 @@ export async function gameRoutes(
   });
 
   // POST /api/games/perkie-jump/save - Save Perky Jump results
-  app.post('perkie-jump/save', async (request, reply) => {
+  app.post('/perkie-jump/save', async (request, reply) => {
     try {
       const body = perkyJumpSchema.parse(request.body);
       const user = await app.prisma.user.findUnique({

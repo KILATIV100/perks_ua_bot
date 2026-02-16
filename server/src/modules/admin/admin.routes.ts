@@ -109,7 +109,7 @@ export async function adminModuleRoutes(
   // ────────────────────────────────────────────────────────────────────────
   // POST /api/admin/verify-code — Validate & confirm 4-digit redemption code
   // ────────────────────────────────────────────────────────────────────────
-  app.post('verify-code', async (request, reply) => {
+  app.post('/verify-code', async (request, reply) => {
     try {
       const body = verifyCodeSchema.parse(request.body);
       const admin = await resolveAdmin(request, app.prisma);
@@ -194,7 +194,7 @@ export async function adminModuleRoutes(
   // ────────────────────────────────────────────────────────────────────────
   // GET /api/admin/orders — Active order queue for admin panel
   // ────────────────────────────────────────────────────────────────────────
-  app.get('orders', async (request, reply) => {
+  app.get('/orders', async (request, reply) => {
     try {
       const admin = await resolveAdmin(request, app.prisma);
       if (!admin || (admin.role !== 'ADMIN' && admin.role !== 'OWNER')) {
@@ -230,7 +230,7 @@ export async function adminModuleRoutes(
   // ────────────────────────────────────────────────────────────────────────
   // GET /api/admin/stats — 24h analytics (Owner only)
   // ────────────────────────────────────────────────────────────────────────
-  app.get('stats', async (request, reply) => {
+  app.get('/stats', async (request, reply) => {
     try {
       const admin = await resolveAdmin(request, app.prisma);
       if (!admin || admin.role !== 'OWNER') {
@@ -269,7 +269,7 @@ export async function adminModuleRoutes(
   // ────────────────────────────────────────────────────────────────────────
   // GET /api/admin/check-role — Check user role (legacy, no JWT required)
   // ────────────────────────────────────────────────────────────────────────
-  app.get<{ Querystring: { telegramId: string } }>('check-role', async (request, reply) => {
+  app.get<{ Querystring: { telegramId: string } }>('/check-role', async (request, reply) => {
     try {
       const telegramId = request.query.telegramId;
       const user = await app.prisma.user.findUnique({
@@ -291,7 +291,7 @@ export async function adminModuleRoutes(
   // ────────────────────────────────────────────────────────────────────────
   // GET /api/admin/list — Admin list (Owner only)
   // ────────────────────────────────────────────────────────────────────────
-  app.get('list', async (request, reply) => {
+  app.get('/list', async (request, reply) => {
     try {
       const admin = await resolveAdmin(request, app.prisma);
       if (!admin || admin.role !== 'OWNER') {
@@ -314,7 +314,7 @@ export async function adminModuleRoutes(
   // ────────────────────────────────────────────────────────────────────────
   // PATCH /api/admin/set-role — Change user role (Owner only)
   // ────────────────────────────────────────────────────────────────────────
-  app.patch('set-role', async (request, reply) => {
+  app.patch('/set-role', async (request, reply) => {
     try {
       const body = setRoleSchema.parse(request.body);
       const admin = await resolveAdmin(request, app.prisma);
@@ -347,7 +347,7 @@ export async function adminModuleRoutes(
   // ────────────────────────────────────────────────────────────────────────
   // GET /api/admin/export-users — Export all users (Owner only)
   // ────────────────────────────────────────────────────────────────────────
-  app.get('export-users', async (request, reply) => {
+  app.get('/export-users', async (request, reply) => {
     try {
       const admin = await resolveAdmin(request, app.prisma);
       if (!admin || admin.role !== 'OWNER') {
@@ -378,7 +378,7 @@ export async function adminModuleRoutes(
   // ────────────────────────────────────────────────────────────────────────
   // GET /api/admin/all-users — Get all users for broadcast (Owner only)
   // ────────────────────────────────────────────────────────────────────────
-  app.get('all-users', async (request, reply) => {
+  app.get('/all-users', async (request, reply) => {
     try {
       const admin = await resolveAdmin(request, app.prisma);
       if (!admin || admin.role !== 'OWNER') {
@@ -399,7 +399,7 @@ export async function adminModuleRoutes(
   // ────────────────────────────────────────────────────────────────────────
   // POST /api/admin/add-points — God Mode (Owner only)
   // ────────────────────────────────────────────────────────────────────────
-  app.post<{ Body: { telegramId?: string; points: number } }>('add-points', async (request, reply) => {
+  app.post<{ Body: { telegramId?: string; points: number } }>('/add-points', async (request, reply) => {
     try {
       const admin = await resolveAdmin(request, app.prisma);
       if (!admin || admin.role !== 'OWNER') {

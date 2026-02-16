@@ -232,7 +232,7 @@ export async function orderRoutes(
   });
 
   // GET /api/orders/:id
-  app.get<{ Params: { id: string } }>(':id', async (request, reply) => {
+  app.get<{ Params: { id: string } }>('/:id', async (request, reply) => {
     const order = await app.prisma.order.findUnique({
       where: { id: request.params.id },
       include: { items: { include: { product: true } }, location: true },
@@ -242,7 +242,7 @@ export async function orderRoutes(
   });
 
   // DELETE /api/orders/:id
-  app.delete<{ Params: { id: string } }>(':id', { preHandler: requireAuth }, async (request, reply) => {
+  app.delete<{ Params: { id: string } }>('/:id', { preHandler: requireAuth }, async (request, reply) => {
     const { userId } = (request as FastifyRequest & { user: JwtPayload }).user;
     const order = await app.prisma.order.findUnique({ where: { id: request.params.id } });
     if (!order) return reply.status(404).send({ error: 'ORDER_NOT_FOUND' });
@@ -253,7 +253,7 @@ export async function orderRoutes(
   });
 
   // PATCH /api/orders/:id/status — Legacy (bot compatibility)
-  app.patch<{ Params: { id: string } }>(':id/status', async (request, reply) => {
+  app.patch<{ Params: { id: string } }>('/:id/status', async (request, reply) => {
     const { id } = request.params;
     const body = z.object({
       adminTelegramId: z.union([z.number(), z.string()]).transform(String),

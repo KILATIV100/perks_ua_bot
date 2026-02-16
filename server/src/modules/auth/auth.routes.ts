@@ -101,7 +101,7 @@ export async function authRoutes(
 ): Promise<void> {
 
   // POST /api/auth/telegram — Main auth endpoint
-  app.post('telegram', async (request, reply) => {
+  app.post('/telegram', async (request, reply) => {
     try {
       const body = telegramAuthSchema.parse(request.body);
 
@@ -202,7 +202,7 @@ export async function authRoutes(
   });
 
   // POST /api/auth/refresh — Refresh access token
-  app.post('refresh', async (request, reply) => {
+  app.post('/refresh', async (request, reply) => {
     try {
       const body = refreshSchema.parse(request.body);
       const payload = verifyRefreshToken(body.refreshToken);
@@ -242,7 +242,7 @@ export async function authRoutes(
   });
 
   // GET /api/auth/me — Current user profile
-  app.get('me', { preHandler: requireAuth }, async (request, reply) => {
+  app.get('/me', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const { userId } = (request as FastifyRequest & { user: JwtPayload }).user;
 
@@ -278,7 +278,7 @@ export async function authRoutes(
   });
 
   // POST /api/auth/logout — Revoke refresh token
-  app.post('logout', { preHandler: requireAuth }, async (request, reply) => {
+  app.post('/logout', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const { userId } = (request as FastifyRequest & { user: JwtPayload }).user;
       await revokeRefreshToken(userId);

@@ -44,7 +44,7 @@ export async function radioRoutes(
 ): Promise<void> {
 
   // ── GET /api/radio/playlist ─────────────────────────────────────────────
-  app.get('playlist', async (request, reply) => {
+  app.get('/playlist', async (request, reply) => {
     try {
       const userId = await resolveUserId(request, app.prisma);
 
@@ -85,7 +85,7 @@ export async function radioRoutes(
   });
 
   // ── GET /api/radio/tracks/:id/likes ─────────────────────────────────────
-  app.get<{ Params: { id: string } }>('tracks/:id/likes', async (request, reply) => {
+  app.get<{ Params: { id: string } }>('/tracks/:id/likes', async (request, reply) => {
     try {
       const trackId = request.params.id;
       const userId = await resolveUserId(request, app.prisma);
@@ -108,7 +108,7 @@ export async function radioRoutes(
   });
 
   // ── POST /api/radio/like — Toggle like ──────────────────────────────────
-  app.post('like', async (request, reply) => {
+  app.post('/like', async (request, reply) => {
     try {
       const body = likeSchema.parse(request.body);
       const userId = await resolveUserId(request, app.prisma);

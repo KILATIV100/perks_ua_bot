@@ -40,7 +40,7 @@ export async function loyaltyRoutes(
 ): Promise<void> {
 
   // POST /api/loyalty/spin — New JWT-based endpoint
-  app.post('spin', async (request, reply) => {
+  app.post('/spin', async (request, reply) => {
     try {
       // Try JWT auth first
       const authHeader = request.headers.authorization;
@@ -114,7 +114,7 @@ export async function loyaltyRoutes(
   });
 
   // GET /api/loyalty/wheel-status
-  app.get('wheel-status', { preHandler: requireAuth }, async (request, reply) => {
+  app.get('/wheel-status', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const { userId } = (request as FastifyRequest & { user: JwtPayload }).user;
 
@@ -142,7 +142,7 @@ export async function loyaltyRoutes(
   });
 
   // POST /api/loyalty/redeem
-  app.post('redeem', async (request, reply) => {
+  app.post('/redeem', async (request, reply) => {
     try {
       let userId: string | undefined;
       let telegramId: string | undefined;
@@ -204,7 +204,7 @@ export async function loyaltyRoutes(
   });
 
   // GET /api/loyalty/history
-  app.get('history', { preHandler: requireAuth }, async (request, reply) => {
+  app.get('/history', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const { userId } = (request as FastifyRequest & { user: JwtPayload }).user;
 
@@ -229,7 +229,7 @@ export async function loyaltyRoutes(
   });
 
   // GET /api/loyalty/balance
-  app.get('balance', { preHandler: requireAuth }, async (request, reply) => {
+  app.get('/balance', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const { userId } = (request as FastifyRequest & { user: JwtPayload }).user;
 

@@ -34,7 +34,7 @@ export async function referralRoutes(
 ): Promise<void> {
 
   // ── GET /api/referral/link ──────────────────────────────────────────────
-  app.get('link', async (request, reply) => {
+  app.get('/link', async (request, reply) => {
     try {
       const user = await resolveUser(request, app.prisma);
       if (!user) {
@@ -55,7 +55,7 @@ export async function referralRoutes(
   });
 
   // ── GET /api/referral/stats ─────────────────────────────────────────────
-  app.get('stats', async (request, reply) => {
+  app.get('/stats', async (request, reply) => {
     try {
       const user = await resolveUser(request, app.prisma);
       if (!user) {

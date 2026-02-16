@@ -197,7 +197,7 @@ export async function gameRoutes(
 ): Promise<void> {
 
   // ── POST /api/games/create ──────────────────────────────────────────────
-  app.post('create', async (request, reply) => {
+  app.post('/create', async (request, reply) => {
     try {
       const body = createGameSchema.parse(request.body);
       const user = await resolveUser(request, app.prisma);
@@ -231,7 +231,7 @@ export async function gameRoutes(
   });
 
   // ── POST /api/games/join ────────────────────────────────────────────────
-  app.post('join', async (request, reply) => {
+  app.post('/join', async (request, reply) => {
     try {
       const body = joinGameSchema.parse(request.body);
       const user = await resolveUser(request, app.prisma);
@@ -259,7 +259,7 @@ export async function gameRoutes(
   });
 
   // ── GET /api/games/:id ──────────────────────────────────────────────────
-  app.get<{ Params: { id: string } }>(':id', async (request, reply) => {
+  app.get<{ Params: { id: string } }>('/:id', async (request, reply) => {
     try {
       const game = await app.prisma.gameSession.findUnique({
         where: { id: request.params.id },
@@ -277,7 +277,7 @@ export async function gameRoutes(
   });
 
   // ── POST /api/games/ai-move — Minimax AI move for TIC_TAC_TOE ──────────
-  app.post('ai-move', async (request, reply) => {
+  app.post('/ai-move', async (request, reply) => {
     try {
       const body = aiMoveSchema.parse(request.body);
       const game = await app.prisma.gameSession.findUnique({ where: { id: body.gameId } });
@@ -341,7 +341,7 @@ export async function gameRoutes(
   });
 
   // ── POST /api/games/submit-score — PERKY_JUMP with anti-cheat ──────────
-  app.post('submit-score', async (request, reply) => {
+  app.post('/submit-score', async (request, reply) => {
     try {
       const body = submitScoreSchema.parse(request.body);
       const user = await resolveUser(request, app.prisma);
@@ -442,7 +442,7 @@ export async function gameRoutes(
   });
 
   // ── GET /api/games/daily-limits — User's daily game limits ──────────────
-  app.get('daily-limits', async (request, reply) => {
+  app.get('/daily-limits', async (request, reply) => {
     try {
       const user = await resolveUser(request, app.prisma);
       if (!user) return reply.status(401).send({ error: 'UNAUTHORIZED' });
