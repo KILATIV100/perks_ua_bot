@@ -141,10 +141,12 @@ async function start(): Promise<void> {
     if (app.io) {
       setupGameSockets(app.io, prisma);
     }
+    // Connect Redis BEFORE server starts to ensure locks & idempotency work from first request
+    await connectRedis();
+
     await app.listen({ port: Number(process.env.PORT) || 3000, host: '0.0.0.0' });
 
-    // Post-start tasks run in background
-    connectRedis().catch((e) => app.log.error(e, '[startup] redis connect failed'));
+    // Post-start tasks run in background (non-critical)
     ensureOwnerExists().catch((e) => app.log.error(e, '[startup] owner setup failed'));
     autoSeedLocations().catch((e) => app.log.error(e, '[startup] location seed failed'));
     autoSeedProducts().catch((e) => app.log.error(e, '[startup] product seed failed'));

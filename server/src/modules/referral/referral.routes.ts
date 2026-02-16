@@ -41,7 +41,7 @@ export async function referralRoutes(
         return reply.status(401).send({ error: 'UNAUTHORIZED' });
       }
 
-      const referralLink = `https://t.me/${BOT_USERNAME}?start=ref_${user.id}`;
+      const referralLink = `https://t.me/${BOT_USERNAME}?start=ref_${user.telegramId}`;
 
       return reply.send({
         referralCode: user.referralCode,
@@ -76,7 +76,7 @@ export async function referralRoutes(
 
       return reply.send({
         referralCode: user.referralCode,
-        referralLink: `https://t.me/${BOT_USERNAME}?start=ref_${user.id}`,
+        referralLink: `https://t.me/${BOT_USERNAME}?start=ref_${user.telegramId}`,
         totalReferrals: referralCount,
         activatedReferrals,
         bonusPerReferral: 10,

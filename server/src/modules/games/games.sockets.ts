@@ -5,17 +5,24 @@
  *  - game:join   — subscribe to a game room
  *  - game:move   — make a move (also aliased as make_move)
  *
+ * Security: JWT authentication on connection.
  * Points: +2 per win, tracked via DailyGameLimit (max 10 pts/day from TTT wins).
  */
 
-import type { Server as SocketIOServer } from 'socket.io';
+import type { Server as SocketIOServer, Socket } from 'socket.io';
 import type { PrismaClient } from '@prisma/client';
+import { verifyAccessToken } from '../../shared/jwt.js';
 import { getKyivDateString } from '../../shared/utils/timezone.js';
 
 type CellValue = 'X' | 'O' | null;
 
 const TTT_WIN_POINTS = 2;
 const TTT_MAX_DAILY_POINTS = 10;
+const DISCONNECT_TIMEOUT_MS = 30_000; // 30 seconds to reconnect
+
+// Track socket → game mapping for disconnect handling
+const socketGameMap = new Map<string, { gameId: string; playerId: string }>();
+const disconnectTimers = new Map<string, NodeJS.Timeout>();
 
 // ── Win-condition helpers ────────────────────────────────────────────────
 
@@ -39,12 +46,41 @@ function isBoardFull(board: CellValue[][]): boolean {
 // ── Setup ────────────────────────────────────────────────────────────────
 
 export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void {
-  io.on('connection', (socket) => {
-    console.log(`[Socket.IO] Client connected: ${socket.id}`);
+  // Authentication middleware
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token as string | undefined;
+    if (!token) {
+      // Allow unauthenticated connections for backward compatibility,
+      // but they won't be able to make moves without a valid playerId check
+      return next();
+    }
+
+    const payload = verifyAccessToken(token);
+    if (payload) {
+      socket.data.userId = payload.userId;
+      socket.data.role = payload.role;
+    }
+    next();
+  });
+
+  io.on('connection', (socket: Socket) => {
+    console.log(`[Socket.IO] Client connected: ${socket.id} (userId: ${socket.data.userId ?? 'anonymous'})`);
 
     socket.on('game:join', (gameId: string) => {
       socket.join(`game:${gameId}`);
       console.log(`[Socket.IO] ${socket.id} joined room game:${gameId}`);
+
+      // Cancel any pending disconnect timer for this player's game
+      const timerKey = `${gameId}:${socket.data.userId}`;
+      const existingTimer = disconnectTimers.get(timerKey);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        disconnectTimers.delete(timerKey);
+        // Notify room that player reconnected
+        io.to(`game:${gameId}`).emit('game:player_reconnected', {
+          playerId: socket.data.userId,
+        });
+      }
     });
 
     const handleMove = async (data: {
@@ -54,6 +90,12 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
       col: number;
     }) => {
       try {
+        // Verify that the socket user matches the claimed playerId
+        if (socket.data.userId && socket.data.userId !== data.playerId) {
+          socket.emit('game:error', { message: 'Player ID mismatch' });
+          return;
+        }
+
         const game = await prisma.gameSession.findUnique({ where: { id: data.gameId } });
 
         if (!game || game.status !== 'PLAYING') {
@@ -106,6 +148,9 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
           : null;
 
         const nextTurn = isPlayer1 ? game.player2Id : game.player1Id;
+
+        // Track socket → game mapping for disconnect handling
+        socketGameMap.set(socket.id, { gameId: data.gameId, playerId: data.playerId });
 
         const updatedGame = await prisma.gameSession.update({
           where: { id: data.gameId },
@@ -185,8 +230,71 @@ export function setupGameSockets(io: SocketIOServer, prisma: PrismaClient): void
     socket.on('game:move', handleMove);
     socket.on('make_move', handleMove); // backward-compat alias
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       console.log(`[Socket.IO] Client disconnected: ${socket.id}`);
+
+      const mapping = socketGameMap.get(socket.id);
+      if (!mapping) return;
+
+      const { gameId, playerId } = mapping;
+      socketGameMap.delete(socket.id);
+
+      // Check if game is still active
+      try {
+        const game = await prisma.gameSession.findUnique({
+          where: { id: gameId },
+          select: { status: true, player1Id: true, player2Id: true },
+        });
+
+        if (!game || game.status !== 'PLAYING') return;
+
+        // Notify the other player
+        io.to(`game:${gameId}`).emit('game:opponent_disconnected', {
+          playerId,
+          timeoutMs: DISCONNECT_TIMEOUT_MS,
+        });
+
+        // Set a timer — if the player doesn't reconnect, abandon the game
+        const timerKey = `${gameId}:${playerId}`;
+        const timer = setTimeout(async () => {
+          disconnectTimers.delete(timerKey);
+
+          try {
+            const currentGame = await prisma.gameSession.findUnique({
+              where: { id: gameId },
+              select: { status: true, player1Id: true, player2Id: true },
+            });
+
+            if (!currentGame || currentGame.status !== 'PLAYING') return;
+
+            // Award win to the remaining player
+            const remainingPlayerId = playerId === currentGame.player1Id
+              ? currentGame.player2Id
+              : currentGame.player1Id;
+
+            await prisma.gameSession.update({
+              where: { id: gameId },
+              data: {
+                status: 'ABANDONED',
+                winnerId: remainingPlayerId,
+              },
+            });
+
+            io.to(`game:${gameId}`).emit('game:abandoned', {
+              disconnectedPlayerId: playerId,
+              winnerId: remainingPlayerId,
+            });
+
+            console.log(`[Game] Game ${gameId} abandoned. Player ${playerId} disconnected. Winner: ${remainingPlayerId}`);
+          } catch (err) {
+            console.error('[Socket.IO] Disconnect timeout error:', err);
+          }
+        }, DISCONNECT_TIMEOUT_MS);
+
+        disconnectTimers.set(timerKey, timer);
+      } catch (err) {
+        console.error('[Socket.IO] Disconnect handler error:', err);
+      }
     });
   });
 }
