@@ -5,7 +5,7 @@ export async function productRoutes(
   _opts: FastifyPluginOptions
 ): Promise<void> {
   // GET /api/products - Get all active products
-  app.get('', async (_request, reply) => {
+  app.get('/', async (_request, reply) => {
     try {
       const products = await app.prisma.product.findMany({
         where: { isActive: true },

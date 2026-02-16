@@ -59,7 +59,7 @@ export async function orderRoutes(
   _opts: FastifyPluginOptions
 ) {
   // Create new order
-  app.post<{ Body: CreateOrderBody }>('', async (request, reply) => {
+  app.post<{ Body: CreateOrderBody }>('/', async (request, reply) => {
     const parseResult = CreateOrderSchema.safeParse(request.body);
 
     if (!parseResult.success) {
@@ -189,7 +189,7 @@ export async function orderRoutes(
   });
 
   // PATCH /api/orders/:id/status - Update order status (Admin/Owner)
-  app.patch<{ Params: { id: string } }>(':id/status', async (request, reply) => {
+  app.patch<{ Params: { id: string } }>('/:id/status', async (request, reply) => {
     try {
       const { id } = request.params;
       const body = UpdateStatusSchema.parse(request.body);
@@ -248,7 +248,7 @@ export async function orderRoutes(
 
   // Get orders by telegram user
   app.get<{ Querystring: { telegramId: string } }>(
-    '',
+    '/',
     async (request, reply) => {
       const { telegramId } = request.query;
 
@@ -290,7 +290,7 @@ export async function orderRoutes(
   );
 
   // Get order by ID
-  app.get<{ Params: { id: string } }>(':id', async (request, reply) => {
+  app.get<{ Params: { id: string } }>('/:id', async (request, reply) => {
     const { id } = request.params;
 
     const order = await app.prisma.order.findUnique({

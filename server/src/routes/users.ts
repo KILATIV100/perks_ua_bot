@@ -39,7 +39,7 @@ export async function userRoutes(
   _opts: FastifyPluginOptions
 ): Promise<void> {
   // POST /api/user/sync - Sync user data from Telegram
-  app.post('sync', async (request, reply) => {
+  app.post('/sync', async (request, reply) => {
     try {
       const body = syncUserSchema.parse(request.body);
 
@@ -129,7 +129,7 @@ export async function userRoutes(
   });
 
   // GET /api/user/:telegramId - Get user data
-  app.get<{ Params: { telegramId: string } }>(':telegramId', async (request, reply) => {
+  app.get<{ Params: { telegramId: string } }>('/:telegramId', async (request, reply) => {
     try {
       const telegramId = request.params.telegramId;
 
