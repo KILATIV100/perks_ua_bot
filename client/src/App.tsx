@@ -274,7 +274,7 @@ function App() {
               cart={cart}
               onCartChange={setCart}
               theme={theme}
-              canPreorder={activeTab === 'menu' ? selectedLocation?.canPreorder : true}
+              canPreorder={activeTab === 'menu' ? selectedLocation?.hasOrdering : true}
               locationName={selectedLocation?.name}
               mode={activeTab === 'menu' ? 'menu' : 'shop'}
             />
