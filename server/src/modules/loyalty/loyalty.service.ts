@@ -42,7 +42,6 @@ export interface SpinInput {
   latitude?: number;
   longitude?: number;
   idempotencyKey?: string;
-  devMode?: boolean;
 }
 
 export type SpinResult =
@@ -160,7 +159,7 @@ export async function processSpin(
     }
 
     // ═══ STEP 4: GEO-VALIDATION ═══
-    const bypassGeo = DEV_TELEGRAM_IDS.has(telegramId) || input.devMode === true;
+    const bypassGeo = DEV_TELEGRAM_IDS.has(telegramId);
 
     if (!bypassGeo) {
       if (input.latitude === undefined || input.longitude === undefined) {

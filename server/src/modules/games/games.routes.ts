@@ -40,11 +40,11 @@ const createGameSchema = z.object({
 
 const joinGameSchema = z.object({
   telegramId: z.union([z.number(), z.string()]).transform(String).optional(),
-  gameId: z.string().uuid(),
+  gameId: z.string().min(1),
 });
 
 const aiMoveSchema = z.object({
-  gameId: z.string().uuid(),
+  gameId: z.string().min(1),
 });
 
 const submitScoreSchema = z.object({
@@ -53,11 +53,6 @@ const submitScoreSchema = z.object({
   timestamp: z.number().int().positive(),
   hash: z.string().length(64),
   gameDurationMs: z.number().int().positive().optional(),
-});
-
-const perkyJumpLegacySchema = z.object({
-  telegramId: z.union([z.number(), z.string()]).transform(String),
-  beansCollected: z.number().int().nonnegative(),
 });
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -443,28 +438,6 @@ export async function gameRoutes(
       app.log.error({ err: error }, 'Submit score error');
       if (error instanceof z.ZodError) return reply.status(400).send({ error: 'Invalid request data', details: error.errors });
       return reply.status(500).send({ error: 'Failed to submit score' });
-    }
-  });
-
-  // ── POST /api/games/perkie-jump/save (legacy, backward compat) ──────────
-  app.post('perkie-jump/save', async (request, reply) => {
-    try {
-      const body = perkyJumpLegacySchema.parse(request.body);
-      const user = await app.prisma.user.findUnique({ where: { telegramId: body.telegramId } });
-      if (!user) return reply.status(404).send({ error: 'User not found' });
-
-      const reward = Math.min(Math.floor(body.beansCollected / 100), 5);
-      if (reward > 0) {
-        await app.prisma.user.update({
-          where: { telegramId: body.telegramId },
-          data: { points: { increment: reward } },
-        });
-      }
-      return reply.send({ success: true, pointsAdded: reward });
-    } catch (error) {
-      app.log.error({ err: error }, 'Perky Jump legacy save error');
-      if (error instanceof z.ZodError) return reply.status(400).send({ error: 'Invalid request data', details: error.errors });
-      return reply.status(500).send({ error: 'Failed to save Perky Jump result' });
     }
   });
 

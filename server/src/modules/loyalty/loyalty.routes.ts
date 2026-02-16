@@ -19,7 +19,6 @@ import { hasSpunTodayKyiv, getNextKyivMidnight } from '../../shared/utils/timezo
 const spinSchema = z.object({
   latitude: z.number().optional(),
   longitude: z.number().optional(),
-  devMode: z.boolean().optional(),
 });
 
 // Also support legacy format
@@ -27,7 +26,6 @@ const legacySpinSchema = z.object({
   telegramId: z.union([z.number(), z.string()]).transform(String),
   userLat: z.number().optional(),
   userLng: z.number().optional(),
-  devMode: z.boolean().optional(),
 });
 
 const legacyRedeemSchema = z.object({
@@ -84,7 +82,6 @@ export async function loyaltyRoutes(
       const body = request.body as Record<string, unknown>;
       const latitude = (body.latitude ?? body.userLat) as number | undefined;
       const longitude = (body.longitude ?? body.userLng) as number | undefined;
-      const devMode = body.devMode as boolean | undefined;
       const idempotencyKey = request.headers['x-idempotency-key'] as string | undefined;
 
       const result = await processSpin(app.prisma, {
@@ -93,7 +90,6 @@ export async function loyaltyRoutes(
         latitude,
         longitude,
         idempotencyKey,
-        devMode,
       });
 
       if (!result.ok) {
