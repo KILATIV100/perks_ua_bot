@@ -1,56 +1,27 @@
-/**
- * Perkie Coffee Jump — Doodle-Jump clone on HTML5 Canvas
- *
- * Gameplay:
- *  - Перкі (coffee mascot) jumps automatically when landing on a platform
- *  - Control left/right via device accelerometer (devicemotion) or on-screen tap buttons
- *  - Platforms: Normal (white foam), Moving (drifting left-right), Spring (high jump)
- *  - Camera scrolls upward; game over when Перкі falls below the screen
- *  - Score = platforms cleared / height gained
- *
- * Security:
- *  - Score and timestamp are combined with a client-side salt and SHA-256'd
- *  - hash = SHA-256(`${score}${SALT}${timestamp}`)
- *  - Server re-computes the hash to reject tampered scores
- *  - The salt is also on the server as GAME_SCORE_SECRET_SALT env var
- */
-
 import { useEffect, useRef, useCallback, useState } from 'react';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 const CANVAS_W = 390;
 const CANVAS_H = 650;
-
-const GRAVITY = 0.35;
-const JUMP_VY = -13;           // Normal jump velocity (upward = negative)
-const SPRING_VY = -20;         // Spring platform boost
-const PLAYER_W = 44;
-const PLAYER_H = 44;
-const PLAYER_MOVE_SPEED = 5;   // px per frame horizontal speed
-
-const PLATFORM_W = 72;
-const PLATFORM_H = 14;
-const PLATFORM_GAP_MIN = 70;   // min vertical gap between platforms
-const PLATFORM_GAP_MAX = 110;  // max vertical gap (increases with height/score)
-const MOVING_PLATFORM_SPEED = 1.5;
-
-// Client-side salt — must match GAME_SCORE_SECRET_SALT on the server
+const GRAVITY = 0.38;
+const BASE_JUMP_VY = -12.8;
+const PLAYER_W = 52;
+const PLAYER_H = 52;
+const PLAYER_MOVE_SPEED = 5.2;
 const CLIENT_SALT = import.meta.env.VITE_GAME_SALT ?? 'perkie-default-salt-change-me';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+type PlatformType = 'normal' | 'moving' | 'fragile';
+type GameMode = 'classic' | 'timed' | 'survival' | 'racing';
 
-type PlatformType = 'normal' | 'moving' | 'spring';
+type Difficulty = 'easy' | 'medium' | 'hard' | 'expert' | 'extreme';
 
 interface Platform {
   x: number;
   y: number;
+  width: number;
+  height: number;
   type: PlatformType;
-  dx: number; // velocity for moving platforms
+  dx: number;
+  broken: boolean;
 }
 
 interface Player {
@@ -63,528 +34,599 @@ interface Player {
 interface GameState {
   player: Player;
   platforms: Platform[];
-  score: number;
-  cameraY: number;   // top of the visible world (world-space Y)
+  cameraY: number;
+  maxHeight: number;
   gameOver: boolean;
+  paused: boolean;
   startTime: number;
+  modeStartedAt: number;
 }
 
 interface PerkieJumpProps {
   telegramId?: string;
   apiUrl?: string;
   onScoreSubmit?: (score: number, pointsAwarded: number) => void;
+  mascotSrc?: string;
+  loyaltyMultiplier?: number;
 }
 
-// ---------------------------------------------------------------------------
-// SHA-256 via Web Crypto API (async)
-// ---------------------------------------------------------------------------
-
-async function sha256(message: string): Promise<string> {
-  const data = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+interface LevelConfig {
+  level: number;
+  minScore: number;
+  maxScore: number;
+  platformWidth: number;
+  gapMin: number;
+  gapMax: number;
+  movingChance: number;
+  fragileChance: number;
+  movingSpeed: number;
+  difficulty: Difficulty;
 }
 
-// ---------------------------------------------------------------------------
-// Platform generation
-// ---------------------------------------------------------------------------
+const PLAYER_HITBOX = { offsetX: 6, offsetY: 5, width: PLAYER_W - 12, height: PLAYER_H - 10 };
 
-function makePlatform(y: number, score: number): Platform {
-  // Higher score → more moving/spring platforms
-  const rand = Math.random();
-  const movingChance = Math.min(0.1 + score * 0.0005, 0.4);
-  const springChance = Math.min(0.03 + score * 0.0001, 0.12);
 
+const MODE_OPTIONS: Array<{ id: GameMode; label: string }> = [
+  { id: 'classic', label: 'Класичний' },
+  { id: 'timed', label: 'На час (60с)' },
+  { id: 'survival', label: 'Виживання' },
+  { id: 'racing', label: 'Гонка' },
+];
+
+const LEVELS: LevelConfig[] = [
+  { level: 1, minScore: 0, maxScore: 999, platformWidth: 110, gapMin: 72, gapMax: 102, movingChance: 0.0, fragileChance: 0.0, movingSpeed: 0, difficulty: 'easy' },
+  { level: 2, minScore: 1000, maxScore: 2499, platformWidth: 92, gapMin: 86, gapMax: 128, movingChance: 0.35, fragileChance: 0.0, movingSpeed: 1.5, difficulty: 'medium' },
+  { level: 3, minScore: 2500, maxScore: 4999, platformWidth: 78, gapMin: 98, gapMax: 146, movingChance: 0.42, fragileChance: 0.3, movingSpeed: 1.95, difficulty: 'hard' },
+  { level: 4, minScore: 5000, maxScore: Number.MAX_SAFE_INTEGER, platformWidth: 66, gapMin: 112, gapMax: 170, movingChance: 0.62, fragileChance: 0.25, movingSpeed: 2.7, difficulty: 'extreme' },
+];
+
+function getLevelConfig(score: number): LevelConfig {
+  return LEVELS.find((l) => score >= l.minScore && score <= l.maxScore) ?? LEVELS[LEVELS.length - 1];
+}
+
+function getChainMultiplier(day: number): number {
+  if (day >= 30) return 4.0;
+  if (day >= 14) return 2.5;
+  if (day >= 7) return 1.8;
+  if (day >= 3) return 1.3;
+  return 1.0;
+}
+
+function calcChainDays(): number {
+  const key = 'perkie_chain_meta';
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) {
+      localStorage.setItem(key, JSON.stringify({ date: today, days: 1 }));
+      return 1;
+    }
+    const parsed = JSON.parse(raw) as { date: string; days: number };
+    if (parsed.date === today) return parsed.days;
+    const last = new Date(`${parsed.date}T00:00:00Z`).getTime();
+    const now = new Date(`${today}T00:00:00Z`).getTime();
+    const diffDays = Math.round((now - last) / (24 * 3600 * 1000));
+    const next = diffDays === 1 ? parsed.days + 1 : 1;
+    localStorage.setItem(key, JSON.stringify({ date: today, days: next }));
+    return next;
+  } catch {
+    return 1;
+  }
+}
+
+function createPlatform(y: number, score: number, multiplier: number): Platform {
+  const cfg = getLevelConfig(score);
+  const r = Math.random();
   let type: PlatformType = 'normal';
-  if (rand < springChance) type = 'spring';
-  else if (rand < springChance + movingChance) type = 'moving';
+  if (r < cfg.fragileChance) type = 'fragile';
+  else if (r < cfg.fragileChance + cfg.movingChance) type = 'moving';
 
   return {
-    x: Math.random() * (CANVAS_W - PLATFORM_W),
+    x: Math.random() * (CANVAS_W - cfg.platformWidth),
     y,
+    width: cfg.platformWidth,
+    height: 14,
     type,
-    dx: type === 'moving' ? MOVING_PLATFORM_SPEED * (Math.random() < 0.5 ? 1 : -1) : 0,
+    dx: type === 'moving' ? cfg.movingSpeed * multiplier * (Math.random() > 0.5 ? 1 : -1) : 0,
+    broken: false,
   };
 }
 
-function generateInitialPlatforms(): Platform[] {
-  const platforms: Platform[] = [];
-  // First platform under the player (guaranteed landing)
-  platforms.push({ x: CANVAS_W / 2 - PLATFORM_W / 2, y: CANVAS_H - 80, type: 'normal', dx: 0 });
-
-  let y = CANVAS_H - 80 - PLATFORM_GAP_MIN;
-  while (y > -CANVAS_H) {
-    platforms.push(makePlatform(y, 0));
-    y -= PLATFORM_GAP_MIN + Math.random() * (PLATFORM_GAP_MAX - PLATFORM_GAP_MIN);
-  }
-  return platforms;
+function drawBackground(ctx: CanvasRenderingContext2D): void {
+  const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+  grad.addColorStop(0, '#1b1726');
+  grad.addColorStop(1, '#0f0d18');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 }
 
-// ---------------------------------------------------------------------------
-// Drawing helpers
-// ---------------------------------------------------------------------------
+function drawPlatform(ctx: CanvasRenderingContext2D, p: Platform, cameraY: number): void {
+  if (p.broken) return;
+  const sy = p.y - cameraY;
 
-function drawPlatform(ctx: CanvasRenderingContext2D, p: Platform, camY: number): void {
-  const screenY = p.y - camY;
-
-  if (p.type === 'spring') {
-    // Green platform with spring indicator
-    ctx.fillStyle = '#4ade80';
-    ctx.shadowColor = '#16a34a';
-    ctx.shadowBlur = 6;
-    ctx.beginPath();
-    ctx.roundRect(p.x, screenY, PLATFORM_W, PLATFORM_H, 6);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    // Spring coil symbol
-    ctx.fillStyle = '#166534';
-    ctx.font = 'bold 10px sans-serif';
-    ctx.fillText('⚡', p.x + PLATFORM_W / 2 - 6, screenY + 11);
+  if (p.type === 'fragile') {
+    ctx.fillStyle = '#5b3a29';
+    ctx.strokeStyle = '#3a2418';
   } else if (p.type === 'moving') {
-    // Blue moving platform
-    ctx.fillStyle = '#60a5fa';
-    ctx.shadowColor = '#2563eb';
-    ctx.shadowBlur = 4;
-    ctx.beginPath();
-    ctx.roundRect(p.x, screenY, PLATFORM_W, PLATFORM_H, 6);
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#e8d3b4';
+    ctx.strokeStyle = '#b98c5e';
   } else {
-    // Normal: milk foam look (white/cream)
-    const grad = ctx.createLinearGradient(p.x, screenY, p.x, screenY + PLATFORM_H);
-    grad.addColorStop(0, '#fefce8');
-    grad.addColorStop(1, '#d4b896');
-    ctx.fillStyle = grad;
-    ctx.shadowColor = 'rgba(0,0,0,0.15)';
-    ctx.shadowBlur = 4;
-    ctx.beginPath();
-    ctx.roundRect(p.x, screenY, PLATFORM_W, PLATFORM_H, 6);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    // Foam bubble dots
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    for (let i = 0; i < 4; i++) {
-      ctx.beginPath();
-      ctx.arc(p.x + 10 + i * 16, screenY + 5, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    ctx.fillStyle = '#f6eadc';
+    ctx.strokeStyle = '#e2c7a0';
   }
+
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(p.x, sy, p.width, p.height, 8);
+  ctx.fill();
+  ctx.stroke();
 }
 
-function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, camY: number): void {
+function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, cameraY: number, mascot: HTMLImageElement | null): void {
   const sx = player.x;
-  const sy = player.y - camY;
+  const sy = player.y - cameraY;
+
+  if (!mascot) {
+    ctx.fillStyle = '#d4a373';
+    ctx.fillRect(sx, sy, PLAYER_W, PLAYER_H);
+    return;
+  }
 
   ctx.save();
   if (player.facing === 'left') {
     ctx.translate(sx + PLAYER_W, sy);
     ctx.scale(-1, 1);
-    ctx.translate(-sx, -sy);
+    ctx.drawImage(mascot, 0, 0, PLAYER_W, PLAYER_H);
+  } else {
+    ctx.drawImage(mascot, sx, sy, PLAYER_W, PLAYER_H);
   }
-
-  // Body — coffee cup
-  ctx.fillStyle = '#92400e';
-  ctx.beginPath();
-  ctx.roundRect(sx + 8, sy + 16, PLAYER_W - 16, PLAYER_H - 16, 6);
-  ctx.fill();
-
-  // Cup sleeve
-  ctx.fillStyle = '#78350f';
-  ctx.fillRect(sx + 8, sy + 24, PLAYER_W - 16, 8);
-
-  // Handle
-  ctx.strokeStyle = '#92400e';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(sx + PLAYER_W - 4, sy + 28, 6, -Math.PI / 2, Math.PI / 2);
-  ctx.stroke();
-
-  // Foam top
-  ctx.fillStyle = '#fef3c7';
-  ctx.beginPath();
-  ctx.ellipse(sx + PLAYER_W / 2, sy + 16, (PLAYER_W - 16) / 2, 6, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Eyes
-  ctx.fillStyle = '#1c1917';
-  ctx.beginPath();
-  ctx.arc(sx + PLAYER_W / 2 - 5, sy + 8, 3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(sx + PLAYER_W / 2 + 5, sy + 8, 3, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Smile
-  ctx.strokeStyle = '#1c1917';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(sx + PLAYER_W / 2, sy + 11, 4, 0.2, Math.PI - 0.2);
-  ctx.stroke();
-
   ctx.restore();
 }
 
-function drawBackground(ctx: CanvasRenderingContext2D): void {
-  const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
-  grad.addColorStop(0, '#1e1b4b');
-  grad.addColorStop(0.5, '#312e81');
-  grad.addColorStop(1, '#1e1b4b');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+async function sha256(message: string): Promise<string> {
+  const data = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-function drawScore(ctx: CanvasRenderingContext2D, score: number): void {
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.font = 'bold 22px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText(`☕ ${score}`, 16, 38);
-}
-
-function drawControls(ctx: CanvasRenderingContext2D): void {
-  // Left arrow button
-  ctx.fillStyle = 'rgba(255,255,255,0.15)';
-  ctx.beginPath();
-  ctx.roundRect(8, CANVAS_H - 80, 72, 64, 12);
-  ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.font = 'bold 28px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('◀', 44, CANVAS_H - 38);
-
-  // Right arrow button
-  ctx.fillStyle = 'rgba(255,255,255,0.15)';
-  ctx.beginPath();
-  ctx.roundRect(CANVAS_W - 80, CANVAS_H - 80, 72, 64, 12);
-  ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.fillText('▶', CANVAS_W - 44, CANVAS_H - 38);
-}
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
-export function PerkieJump({ telegramId, apiUrl, onScoreSubmit }: PerkieJumpProps) {
+export function PerkieJump({ telegramId, apiUrl, onScoreSubmit, mascotSrc = '/perkie.png', loyaltyMultiplier = 1 }: PerkieJumpProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stateRef = useRef<GameState | null>(null);
+  const mascotRef = useRef<HTMLImageElement | null>(null);
   const animFrameRef = useRef<number>(0);
+  const stateRef = useRef<GameState | null>(null);
   const inputRef = useRef({ left: false, right: false, accelX: 0 });
-  const [gamePhase, setGamePhase] = useState<'idle' | 'playing' | 'gameover'>('idle');
-  const [finalScore, setFinalScore] = useState(0);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [pointsEarned, setPointsEarned] = useState(0);
+  const fragileTouchRef = useRef<WeakSet<Platform>>(new WeakSet());
 
-  // ── Initialize / restart game ───────────────────────────────────────────
+  const [phase, setPhase] = useState<'menu' | 'playing' | 'gameover'>('menu');
+  const [selectedMode, setSelectedMode] = useState<GameMode>('classic');
+  const [score, setScore] = useState(0);
+  const [level, setLevel] = useState(1);
+  const [difficulty, setDifficulty] = useState<Difficulty>('easy');
+  const [heightMeters, setHeightMeters] = useState(0);
+  const [coinsCollected, setCoinsCollected] = useState(0);
+  const [xp, setXp] = useState(0);
+  const [chainDays] = useState(() => calcChainDays());
+  const [finalScore, setFinalScore] = useState(0);
+  const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [pointsAwarded, setPointsAwarded] = useState(0);
+  const [loyaltyBonus, setLoyaltyBonus] = useState(0);
+
+  const chainMultiplier = getChainMultiplier(chainDays);
+
+  const submitScore = useCallback(async (finalValue: number, durationMs: number, bonusPoints: number) => {
+    if (!telegramId || !apiUrl) return;
+    setSubmitting(true);
+    try {
+      const timestamp = Date.now();
+      const hash = await sha256(`${finalValue}${CLIENT_SALT}${timestamp}`);
+      const res = await fetch(`${apiUrl}/api/games/submit-score`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          telegramId,
+          score: finalValue,
+          timestamp,
+          hash,
+          gameDurationMs: durationMs,
+          mode: selectedMode,
+          heightMeters,
+          coinsCollected,
+          chainDays,
+          chainMultiplier,
+          loyaltyBonus: bonusPoints,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json() as { pointsAwarded?: number };
+        const serverPoints = data.pointsAwarded ?? 0;
+        setPointsAwarded(serverPoints);
+        setLoyaltyBonus(bonusPoints);
+
+        // Integration hook with host loyalty system: award server points + bonus method.
+        onScoreSubmit?.(finalValue, serverPoints + bonusPoints);
+        setSubmitted(true);
+      }
+    } catch {
+      // no-op
+    } finally {
+      setSubmitting(false);
+    }
+  }, [telegramId, apiUrl, selectedMode, heightMeters, coinsCollected, chainDays, chainMultiplier, onScoreSubmit]);
+
   const startGame = useCallback(() => {
-    const platforms = generateInitialPlatforms();
+    const first: Platform = { x: CANVAS_W / 2 - 55, y: CANVAS_H - 90, width: 110, height: 14, type: 'normal', dx: 0, broken: false };
+    const platforms: Platform[] = [first];
+
+    let y = first.y - 85;
+    while (y > -CANVAS_H) {
+      platforms.push(createPlatform(y, 0, 1));
+      y -= 80 + Math.random() * 25;
+    }
+
     stateRef.current = {
-      player: {
-        x: CANVAS_W / 2 - PLAYER_W / 2,
-        y: CANVAS_H - 80 - PLAYER_H, // just above first platform
-        vy: JUMP_VY,
-        facing: 'right',
-      },
+      player: { x: CANVAS_W / 2 - PLAYER_W / 2, y: first.y - PLAYER_H, vy: BASE_JUMP_VY, facing: 'right' },
       platforms,
-      score: 0,
       cameraY: 0,
+      maxHeight: 0,
       gameOver: false,
+      paused: false,
       startTime: Date.now(),
+      modeStartedAt: Date.now(),
     };
-    setGamePhase('playing');
+
+    setScore(0);
+    setLevel(1);
+    setDifficulty('easy');
+    setHeightMeters(0);
+    setCoinsCollected(0);
+    setXp(0);
     setSubmitted(false);
-    setPointsEarned(0);
+    setPointsAwarded(0);
+    setLoyaltyBonus(0);
+    setPhase('playing');
   }, []);
 
-  // ── Score submission ────────────────────────────────────────────────────
-  const submitScore = useCallback(
-    async (score: number, durationMs: number) => {
-      if (!telegramId || !apiUrl) return;
-      setSubmitting(true);
-      try {
-        const timestamp = Date.now();
-        const hash = await sha256(`${score}${CLIENT_SALT}${timestamp}`);
-        const res = await fetch(`${apiUrl}/api/games/submit-score`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ telegramId, score, timestamp, hash, gameDurationMs: durationMs }),
-        });
-        if (res.ok) {
-          const data = await res.json() as { pointsAwarded?: number };
-          const pts = data.pointsAwarded ?? 0;
-          setPointsEarned(pts);
-          onScoreSubmit?.(score, pts);
-          setSubmitted(true);
-        }
-      } catch {
-        // silent — offline or server error
-      } finally {
-        setSubmitting(false);
-      }
-    },
-    [telegramId, apiUrl, onScoreSubmit],
-  );
+  const handleGameOver = useCallback((endScore: number, endHeight: number, endCoins: number) => {
+    const gs = stateRef.current;
+    if (!gs) return;
+    gs.gameOver = true;
 
-  // ── Main game loop ──────────────────────────────────────────────────────
+    setFinalScore(endScore);
+    setPhase('gameover');
+
+    const durationMs = Date.now() - gs.startTime;
+    const earnedXp = Math.floor(endHeight / 10) + Math.floor(endCoins / 5);
+    setXp(earnedXp);
+
+    // Additional loyalty earning method based on gameplay coins + chain + tier multiplier.
+    const bonusPoints = Math.floor((endCoins / 25) * chainMultiplier * loyaltyMultiplier);
+    submitScore(endScore, durationMs, bonusPoints);
+  }, [submitScore, chainMultiplier, loyaltyMultiplier]);
+
+  useEffect(() => {
+    const img = new Image();
+    img.src = mascotSrc;
+    img.onload = () => { mascotRef.current = img; };
+    img.onerror = () => { mascotRef.current = null; };
+    return () => { img.onload = null; img.onerror = null; };
+  }, [mascotSrc]);
+
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="viewport"]');
+    const prev = meta?.getAttribute('content');
+    meta?.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover');
+
+    const preventContext = (e: Event) => e.preventDefault();
+    const preventSelect = (e: Event) => e.preventDefault();
+
+    let lastTouchEnd = 0;
+    const preventDoubleTap = (e: TouchEvent) => {
+      const now = Date.now();
+      if (now - lastTouchEnd <= 300) e.preventDefault();
+      lastTouchEnd = now;
+    };
+
+    const preventPinch = (e: TouchEvent) => {
+      if (e.touches.length > 1) e.preventDefault();
+    };
+
+    document.addEventListener('contextmenu', preventContext);
+    document.addEventListener('selectstart', preventSelect);
+    document.addEventListener('touchend', preventDoubleTap, { passive: false });
+    document.addEventListener('touchmove', preventPinch, { passive: false });
+
+    return () => {
+      document.removeEventListener('contextmenu', preventContext);
+      document.removeEventListener('selectstart', preventSelect);
+      document.removeEventListener('touchend', preventDoubleTap);
+      document.removeEventListener('touchmove', preventPinch);
+      if (prev) meta?.setAttribute('content', prev);
+    };
+  }, []);
+
   const gameLoop = useCallback(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     const gs = stateRef.current;
-    if (!canvas || !ctx || !gs || gs.gameOver) return;
+    if (!canvas || !ctx || !gs || gs.gameOver || gs.paused) return;
 
+    const elapsed = Date.now() - gs.modeStartedAt;
     const inp = inputRef.current;
 
-    // ── Horizontal movement ──────────────────────────────────────────────
-    const accelInput = Math.abs(inp.accelX) > 2 ? inp.accelX / 9.8 : 0; // normalize ~1g
     let dx = 0;
+    const accelInput = Math.abs(inp.accelX) > 2 ? inp.accelX / 9.8 : 0;
     if (inp.left || accelInput < -0.15) { dx = -PLAYER_MOVE_SPEED; gs.player.facing = 'left'; }
     if (inp.right || accelInput > 0.15) { dx = PLAYER_MOVE_SPEED; gs.player.facing = 'right'; }
 
     gs.player.x += dx;
-    // Wrap horizontally
     if (gs.player.x + PLAYER_W < 0) gs.player.x = CANVAS_W;
     if (gs.player.x > CANVAS_W) gs.player.x = -PLAYER_W;
 
-    // ── Vertical physics ─────────────────────────────────────────────────
-    gs.player.vy += GRAVITY;
+    const modeGravityBoost = selectedMode === 'survival' ? 0.06 : selectedMode === 'timed' && elapsed > 30000 ? 0.08 : 0;
+    gs.player.vy += GRAVITY + modeGravityBoost;
     gs.player.y += gs.player.vy;
 
-    // ── Platform collision (only when falling down) ──────────────────────
+    const baseScore = Math.floor(gs.maxHeight * 2.2);
+    const difficultyMultiplier = Math.min(1 + baseScore / 4000, 2.25);
+
+    for (const p of gs.platforms) {
+      if (p.type === 'moving' && !p.broken) {
+        const racingBoost = selectedMode === 'racing' ? 1.2 : 1;
+        p.x += p.dx * racingBoost;
+        if (p.x <= 0 || p.x + p.width >= CANVAS_W) p.dx *= -1;
+      }
+    }
+
     if (gs.player.vy > 0) {
-      const pFeet = gs.player.y + PLAYER_H;
-      const pLeft = gs.player.x;
-      const pRight = gs.player.x + PLAYER_W;
+      const feetY = gs.player.y + PLAYER_HITBOX.offsetY + PLAYER_HITBOX.height;
+      const prevFeetY = feetY - gs.player.vy;
+      const left = gs.player.x + PLAYER_HITBOX.offsetX;
+      const right = left + PLAYER_HITBOX.width;
 
-      for (const plat of gs.platforms) {
-        const prevFeet = pFeet - gs.player.vy;
-        const platTop = plat.y;
-        const platRight = plat.x + PLATFORM_W;
+      for (const p of gs.platforms) {
+        if (p.broken) continue;
+        if (prevFeetY <= p.y && feetY >= p.y && right > p.x + 4 && left < p.x + p.width - 4) {
+          gs.player.y = p.y - PLAYER_HITBOX.height - PLAYER_HITBOX.offsetY;
+          gs.player.vy = BASE_JUMP_VY;
 
-        if (
-          prevFeet <= platTop &&
-          pFeet >= platTop &&
-          pRight > plat.x + 4 &&
-          pLeft < platRight - 4
-        ) {
-          gs.player.y = plat.y - PLAYER_H;
-          gs.player.vy = plat.type === 'spring' ? SPRING_VY : JUMP_VY;
+          if (p.type === 'fragile' && !fragileTouchRef.current.has(p)) {
+            fragileTouchRef.current.add(p);
+            window.setTimeout(() => { p.broken = true; }, 2000);
+          }
           break;
         }
       }
     }
 
-    // ── Camera scroll ────────────────────────────────────────────────────
-    // Scroll up when player reaches upper 40% of screen
-    const playerScreenY = gs.player.y - gs.cameraY;
-    if (playerScreenY < CANVAS_H * 0.4) {
-      const scrollAmount = CANVAS_H * 0.4 - playerScreenY;
-      gs.cameraY -= scrollAmount;
-      gs.score = Math.max(gs.score, Math.floor(-gs.cameraY / 100));
+    const targetScreenY = CANVAS_H * 0.62;
+    const screenY = gs.player.y - gs.cameraY;
+    if (screenY < targetScreenY) {
+      const desired = gs.player.y - targetScreenY;
+      gs.cameraY += (desired - gs.cameraY) * 0.18;
     }
 
-    // ── Update moving platforms ──────────────────────────────────────────
-    for (const plat of gs.platforms) {
-      if (plat.type === 'moving') {
-        plat.x += plat.dx;
-        if (plat.x <= 0 || plat.x + PLATFORM_W >= CANVAS_W) plat.dx *= -1;
-      }
+    gs.maxHeight = Math.max(gs.maxHeight, -gs.cameraY);
+
+    const newScore = Math.floor(gs.maxHeight * 2.2);
+    const newLevelCfg = getLevelConfig(newScore);
+    const newHeight = Math.floor(gs.maxHeight / 10);
+
+    const modeCoinBoost = selectedMode === 'timed' ? 1.3 : selectedMode === 'survival' ? 1.15 : 1;
+    const newCoins = Math.floor((newHeight / 8) * modeCoinBoost * chainMultiplier * loyaltyMultiplier);
+
+    if (newScore !== score) setScore(newScore);
+    if (newLevelCfg.level !== level) setLevel(newLevelCfg.level);
+    if (newLevelCfg.difficulty !== difficulty) setDifficulty(newLevelCfg.difficulty);
+    if (newHeight !== heightMeters) setHeightMeters(newHeight);
+    if (newCoins !== coinsCollected) setCoinsCollected(newCoins);
+
+    const minY = Math.min(...gs.platforms.map((p) => p.y));
+    if (minY > gs.cameraY - CANVAS_H) {
+      const modeGapFactor = selectedMode === 'timed' ? 1.1 : selectedMode === 'survival' ? 1.12 : 1;
+      const gap = (newLevelCfg.gapMin + Math.random() * (newLevelCfg.gapMax - newLevelCfg.gapMin)) * modeGapFactor * (0.95 + difficultyMultiplier * 0.08);
+      gs.platforms.push(createPlatform(minY - gap, newScore, difficultyMultiplier));
     }
 
-    // ── Generate new platforms at top ────────────────────────────────────
-    const topPlatY = Math.min(...gs.platforms.map((p) => p.y));
-    if (topPlatY > gs.cameraY - CANVAS_H) {
-      const gapMultiplier = Math.min(1 + gs.score * 0.001, 1.5);
-      const gap = PLATFORM_GAP_MIN + Math.random() * (PLATFORM_GAP_MAX - PLATFORM_GAP_MIN) * gapMultiplier;
-      gs.platforms.push(makePlatform(topPlatY - gap, gs.score));
-    }
+    gs.platforms = gs.platforms.filter((p) => !p.broken && p.y < gs.cameraY + CANVAS_H + 240);
 
-    // ── Cull platforms that are way off the bottom ───────────────────────
-    gs.platforms = gs.platforms.filter((p) => p.y < gs.cameraY + CANVAS_H + 200);
-
-    // ── Game over: player fell below screen ──────────────────────────────
-    if (gs.player.y - gs.cameraY > CANVAS_H + 100) {
-      gs.gameOver = true;
-      const duration = Date.now() - gs.startTime;
-      setFinalScore(gs.score);
-      setGamePhase('gameover');
-      submitScore(gs.score, duration);
+    if (selectedMode === 'timed' && elapsed >= 60000) {
+      handleGameOver(newScore, newHeight, newCoins);
       return;
     }
 
-    // ── Draw ─────────────────────────────────────────────────────────────
-    drawBackground(ctx);
-    for (const plat of gs.platforms) {
-      const screenY = plat.y - gs.cameraY;
-      if (screenY > -PLATFORM_H && screenY < CANVAS_H + PLATFORM_H) {
-        drawPlatform(ctx, plat, gs.cameraY);
-      }
+    if (gs.player.y - gs.cameraY > CANVAS_H + 120) {
+      handleGameOver(newScore, newHeight, newCoins);
+      return;
     }
-    drawPlayer(ctx, gs.player, gs.cameraY);
-    drawScore(ctx, gs.score);
-    drawControls(ctx);
+
+    drawBackground(ctx);
+    for (const p of gs.platforms) {
+      const sy = p.y - gs.cameraY;
+      if (sy > -30 && sy < CANVAS_H + 30) drawPlatform(ctx, p, gs.cameraY);
+    }
+    drawPlayer(ctx, gs.player, gs.cameraY, mascotRef.current);
 
     animFrameRef.current = requestAnimationFrame(gameLoop);
-  }, [submitScore]);
+  }, [selectedMode, chainMultiplier, loyaltyMultiplier, score, level, difficulty, heightMeters, coinsCollected, handleGameOver]);
 
-  // ── Start/stop loop when phase changes ─────────────────────────────────
   useEffect(() => {
-    if (gamePhase === 'playing') {
-      animFrameRef.current = requestAnimationFrame(gameLoop);
-    }
+    if (phase === 'playing') animFrameRef.current = requestAnimationFrame(gameLoop);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [gamePhase, gameLoop]);
+  }, [phase, gameLoop]);
 
-  // ── Input: keyboard (desktop) ───────────────────────────────────────────
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') inputRef.current.left = true;
-      if (e.key === 'ArrowRight') inputRef.current.right = true;
+      if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') inputRef.current.left = true;
+      if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') inputRef.current.right = true;
+      if (e.key === 'ArrowUp' || e.key === ' ') {
+        const gs = stateRef.current;
+        if (gs && gs.player.vy > -6) gs.player.vy = BASE_JUMP_VY * 0.9;
+      }
     };
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') inputRef.current.left = false;
-      if (e.key === 'ArrowRight') inputRef.current.right = false;
+      if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') inputRef.current.left = false;
+      if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') inputRef.current.right = false;
     };
+    const onMotion = (e: DeviceMotionEvent) => {
+      const accel = e.accelerationIncludingGravity;
+      if (accel?.x !== null && accel?.x !== undefined) inputRef.current.accelX = accel.x;
+    };
+
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('devicemotion', onMotion);
+
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('devicemotion', onMotion);
     };
   }, []);
 
-  // ── Input: device accelerometer ─────────────────────────────────────────
+  const touchControl = useCallback((dir: 'left' | 'right' | 'jump', active: boolean) => {
+    if (dir === 'left') inputRef.current.left = active;
+    if (dir === 'right') inputRef.current.right = active;
+    if (dir === 'jump' && active) {
+      const gs = stateRef.current;
+      if (gs && gs.player.vy > -6) gs.player.vy = BASE_JUMP_VY * 0.9;
+    }
+  }, []);
+
   useEffect(() => {
-    const onMotion = (e: DeviceMotionEvent) => {
-      const accel = e.accelerationIncludingGravity;
-      if (accel?.x !== null && accel?.x !== undefined) {
-        inputRef.current.accelX = accel.x;
-      }
-    };
-    window.addEventListener('devicemotion', onMotion);
-    return () => window.removeEventListener('devicemotion', onMotion);
-  }, []);
-
-  // ── Input: touch buttons on canvas ─────────────────────────────────────
-  const handleCanvasTouch = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
-    const scaleX = CANVAS_W / rect.width;
+    canvas.width = Math.floor(rect.width * dpr);
+    canvas.height = Math.floor(rect.height * dpr);
 
-    let leftPressed = false;
-    let rightPressed = false;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
 
-    for (let i = 0; i < e.touches.length; i++) {
-      const tx = (e.touches[i].clientX - rect.left) * scaleX;
-      const ty = (e.touches[i].clientY - rect.top) * (CANVAS_H / rect.height);
-      // Left button zone: x 8–80, y CANVAS_H-80 to CANVAS_H-16
-      if (tx >= 8 && tx <= 80 && ty >= CANVAS_H - 80 && ty <= CANVAS_H - 16) leftPressed = true;
-      // Right button zone: x CANVAS_W-80 to CANVAS_W-8
-      if (tx >= CANVAS_W - 80 && tx <= CANVAS_W - 8 && ty >= CANVAS_H - 80 && ty <= CANVAS_H - 16) rightPressed = true;
-    }
-
-    inputRef.current.left = leftPressed;
-    inputRef.current.right = rightPressed;
-  }, []);
-
-  const handleCanvasTouchEnd = useCallback(() => {
-    inputRef.current.left = false;
-    inputRef.current.right = false;
-  }, []);
-
-  // ── Idle screen drawing ─────────────────────────────────────────────────
-  useEffect(() => {
-    if (gamePhase !== 'idle') return;
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) return;
-
-    drawBackground(ctx);
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.font = 'bold 28px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Perkie Coffee Jump', CANVAS_W / 2, CANVAS_H / 2 - 60);
-    ctx.font = '18px sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.fillText('Стрибай по молочній пінці!', CANVAS_W / 2, CANVAS_H / 2 - 20);
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.font = '15px sans-serif';
-    ctx.fillText('Нахили телефон або тапай кнопки', CANVAS_W / 2, CANVAS_H / 2 + 20);
-  }, [gamePhase]);
-
-  // ── Game-over screen drawing ────────────────────────────────────────────
-  useEffect(() => {
-    if (gamePhase !== 'gameover') return;
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) return;
-
-    // Dark overlay
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#fbbf24';
-    ctx.font = 'bold 32px sans-serif';
-    ctx.fillText('Гра закінчена! ☕', CANVAS_W / 2, CANVAS_H / 2 - 70);
-
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.font = 'bold 24px sans-serif';
-    ctx.fillText(`Рахунок: ${finalScore}`, CANVAS_W / 2, CANVAS_H / 2 - 20);
-
-    if (submitting) {
-      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    if (phase === 'menu') {
+      drawBackground(ctx);
+      ctx.fillStyle = '#d4a373';
+      ctx.font = 'bold 32px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Perky Jump', CANVAS_W / 2, CANVAS_H / 2 - 50);
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
       ctx.font = '16px sans-serif';
-      ctx.fillText('Зберігаємо результат...', CANVAS_W / 2, CANVAS_H / 2 + 20);
-    } else if (submitted) {
-      ctx.fillStyle = '#4ade80';
-      ctx.font = 'bold 18px sans-serif';
-      ctx.fillText(`+${pointsEarned} балів! 🎉`, CANVAS_W / 2, CANVAS_H / 2 + 20);
+      ctx.fillText('Обери режим та запускай гру', CANVAS_W / 2, CANVAS_H / 2 - 18);
     }
-  }, [gamePhase, finalScore, submitting, submitted, pointsEarned]);
+  }, [phase]);
 
   return (
-    <div className="flex flex-col items-center gap-4">
-      <canvas
-        ref={canvasRef}
-        width={CANVAS_W}
-        height={CANVAS_H}
-        className="rounded-2xl w-full max-w-[390px] touch-none"
-        style={{ imageRendering: 'pixelated', maxHeight: '70vh', objectFit: 'contain' }}
-        onTouchStart={handleCanvasTouch}
-        onTouchMove={handleCanvasTouch}
-        onTouchEnd={handleCanvasTouchEnd}
-        onTouchCancel={handleCanvasTouchEnd}
-      />
+    <div className="flex flex-col items-center gap-3" style={{ userSelect: 'none', WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>
+      <div className="relative w-full max-w-[390px]" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
+        <canvas ref={canvasRef} width={CANVAS_W} height={CANVAS_H} className="rounded-2xl w-full" style={{ maxHeight: '70vh', objectFit: 'contain', touchAction: 'none' }} />
 
-      {gamePhase === 'idle' && (
-        <button
-          className="px-8 py-3 rounded-2xl font-bold text-white text-lg"
-          style={{ background: 'linear-gradient(135deg, #92400e, #d97706)' }}
-          onClick={startGame}
-        >
-          ☕ Почати гру
-        </button>
-      )}
+        {phase === 'playing' && (
+          <>
+            <div className="absolute top-3 left-3 px-3 py-2 rounded-xl text-xs font-bold" style={{ background: 'rgba(15,13,24,0.82)', color: '#d4a373' }}>
+              Score: {score} | Lvl {level}
+            </div>
+            <div className="absolute top-3 right-3 px-3 py-2 rounded-xl text-xs font-bold" style={{ background: 'rgba(15,13,24,0.82)', color: '#d4a373' }}>
+              {heightMeters}м • {selectedMode}
+            </div>
+            <div className="absolute bottom-24 left-3 px-3 py-2 rounded-xl text-xs font-bold" style={{ background: 'rgba(15,13,24,0.82)', color: '#d4a373' }}>
+              💰 {coinsCollected} • x{chainMultiplier.toFixed(1)}
+            </div>
 
-      {gamePhase === 'gameover' && (
-        <div className="flex gap-3">
+            {/* Visible control buttons */}
+            <div className="absolute bottom-3 left-0 right-0 px-3 flex items-center justify-between pointer-events-none">
+              <button
+                className="w-16 h-14 rounded-xl text-2xl font-bold text-white pointer-events-auto"
+                style={{ background: 'rgba(0,0,0,0.45)' }}
+                onTouchStart={(e) => { e.preventDefault(); touchControl('left', true); }}
+                onTouchEnd={(e) => { e.preventDefault(); touchControl('left', false); }}
+                onMouseDown={() => touchControl('left', true)}
+                onMouseUp={() => touchControl('left', false)}
+                onMouseLeave={() => touchControl('left', false)}
+              >
+                ◀
+              </button>
+
+              <button
+                className="w-16 h-14 rounded-xl text-2xl font-bold text-white pointer-events-auto"
+                style={{ background: 'rgba(0,0,0,0.55)' }}
+                onTouchStart={(e) => { e.preventDefault(); touchControl('jump', true); }}
+                onMouseDown={() => touchControl('jump', true)}
+              >
+                ⤒
+              </button>
+
+              <button
+                className="w-16 h-14 rounded-xl text-2xl font-bold text-white pointer-events-auto"
+                style={{ background: 'rgba(0,0,0,0.45)' }}
+                onTouchStart={(e) => { e.preventDefault(); touchControl('right', true); }}
+                onTouchEnd={(e) => { e.preventDefault(); touchControl('right', false); }}
+                onMouseDown={() => touchControl('right', true)}
+                onMouseUp={() => touchControl('right', false)}
+                onMouseLeave={() => touchControl('right', false)}
+              >
+                ▶
+              </button>
+            </div>
+          </>
+        )}
+
+        {phase === 'gameover' && (
+          <div className="absolute inset-0 bg-black/65 rounded-2xl flex flex-col items-center justify-center text-center px-4">
+            <h3 className="text-2xl font-extrabold" style={{ color: '#d4a373' }}>Game Over</h3>
+            <p className="text-white mt-2">Score: <b>{finalScore}</b> • Height: <b>{heightMeters}м</b></p>
+            <p className="text-white/85 text-sm mt-1">Difficulty: {difficulty} • XP: {xp}</p>
+            <p className="text-white/70 text-xs mt-1">Coins: {coinsCollected} • Chain day {chainDays}</p>
+            {submitting && <p className="text-white/70 mt-2 text-sm">Синхронізація з лояльністю...</p>}
+            {!submitting && submitted && (
+              <p className="text-green-300 mt-2 text-sm">
+                +{pointsAwarded} серверних балів • +{loyaltyBonus} bonus
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {phase === 'menu' && (
+        <div className="w-full max-w-[390px] space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            {MODE_OPTIONS.map((mode) => (
+              <button
+                key={mode.id}
+                className="px-3 py-3 rounded-xl text-sm font-bold"
+                style={{
+                  background: selectedMode === mode.id ? 'linear-gradient(135deg, #6f3b16, #d4a373)' : 'rgba(31,41,55,0.9)',
+                  color: '#fff',
+                }}
+                onClick={() => setSelectedMode(mode.id)}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+
           <button
-            className="px-6 py-3 rounded-2xl font-bold text-white"
-            style={{ background: 'linear-gradient(135deg, #92400e, #d97706)' }}
+            className="w-full px-8 py-3 rounded-2xl font-bold text-white text-lg"
+            style={{ background: 'linear-gradient(135deg, #6f3b16, #d4a373)' }}
             onClick={startGame}
           >
-            ↺ Ще раз
+            ☕ Почати гру
           </button>
         </div>
       )}
 
-      {gamePhase === 'playing' && (
-        <p className="text-xs opacity-50 text-center">
-          Нахили телефон або тапай ◀ ▶
-        </p>
+      {phase === 'gameover' && (
+        <button
+          className="px-6 py-3 rounded-2xl font-bold text-white"
+          style={{ background: 'linear-gradient(135deg, #6f3b16, #d4a373)' }}
+          onClick={() => setPhase('menu')}
+        >
+          ↺ Меню режимів
+        </button>
       )}
     </div>
   );

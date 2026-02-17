@@ -16,6 +16,7 @@ import { sendTelegramMessage } from '../../shared/utils/telegram.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
+const AUTO_CANCEL_DELAY_MS = 3 * 60 * 1000;
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -49,23 +50,32 @@ const legacyCreateOrderSchema = z.object({
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-async function sendToAdminChat(message: string, inlineKeyboard?: unknown[][]): Promise<void> {
-  if (!BOT_TOKEN || !ADMIN_CHAT_ID) return;
+async function sendTelegramHtmlMessage(
+  chatId: string,
+  message: string,
+  inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>,
+): Promise<void> {
+  if (!BOT_TOKEN) return;
+
   try {
     const body: Record<string, unknown> = {
-      chat_id: ADMIN_CHAT_ID,
+      chat_id: chatId,
       text: message,
       parse_mode: 'HTML',
     };
+
     if (inlineKeyboard) {
-      body.reply_markup = JSON.stringify({ inline_keyboard: inlineKeyboard });
+      body.reply_markup = { inline_keyboard: inlineKeyboard };
     }
+
     await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-  } catch { /* silent */ }
+  } catch {
+    // silent
+  }
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -74,6 +84,63 @@ export async function orderRoutes(
   app: FastifyInstance,
   _opts: FastifyPluginOptions,
 ): Promise<void> {
+
+  const notifyAdminsAboutOrder = async (
+    message: string,
+    inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>,
+  ): Promise<void> => {
+    try {
+      const admins = await app.prisma.user.findMany({
+        where: { role: { in: ['ADMIN', 'OWNER'] } },
+        select: { telegramId: true },
+      });
+
+      const recipients = new Set<string>();
+      for (const admin of admins) {
+        if (admin.telegramId) recipients.add(admin.telegramId);
+      }
+      if (ADMIN_CHAT_ID) recipients.add(String(ADMIN_CHAT_ID));
+
+      await Promise.all(
+        [...recipients].map((chatId) => sendTelegramHtmlMessage(chatId, message, inlineKeyboard)),
+      );
+    } catch (error) {
+      app.log.error({ err: error }, 'Failed to notify admins about order');
+    }
+  };
+
+  const scheduleAutoCancel = (orderId: string): void => {
+    setTimeout(async () => {
+      try {
+        const order = await app.prisma.order.findUnique({
+          where: { id: orderId },
+          include: {
+            user: { select: { telegramId: true } },
+          },
+        });
+
+        if (!order || order.status !== 'PENDING') {
+          return;
+        }
+
+        const cancelledOrder = await app.prisma.order.update({
+          where: { id: orderId },
+          data: { status: 'REJECTED' },
+        });
+
+        await sendTelegramMessage(
+          Number(order.user.telegramId),
+          '❌ Замовлення скасовано. Наразі великий потік людей, бариста не може прийняти замовлення завчасно. Спробуйте замовити на місці!',
+        );
+
+        await notifyAdminsAboutOrder(
+          `❌ <b>Замовлення #${cancelledOrder.orderNumber} автоматично скасовано</b> (минуло 3 хв)`,
+        );
+      } catch (error) {
+        app.log.error({ err: error, orderId }, 'Order auto-cancel failed');
+      }
+    }, AUTO_CANCEL_DELAY_MS);
+  };
 
   // POST /api/orders
   app.post('/', async (request, reply) => {
@@ -139,9 +206,11 @@ export async function orderRoutes(
             const userName = u.firstName || u.username || `ID: ${u.telegramId}`;
 
             const adminMsg = `🆕 <b>НОВЕ ЗАМОВЛЕННЯ #${order.orderNumber}</b>\n\n👤 ${userName}\n📍 ${order.location.name}\n💰 <b>${totalPrice} грн</b>\n\n📋 <b>Склад:</b>\n${itemsList}`;
-            await sendToAdminChat(adminMsg, [[{ text: '✅ Прийняти в роботу', callback_data: `order_accept:${order.id}` }]]);
+            await notifyAdminsAboutOrder(adminMsg, [[{ text: '✅ Прийняти в роботу', callback_data: `order_accept:${order.id}` }]]);
 
             sendTelegramMessage(Number(u.telegramId), `✅ *Замовлення #${order.orderNumber} створено!*\n\n📍 ${order.location.name}\n⏱ Очікуйте ~${pickupTime} хв`).catch(() => {});
+
+            scheduleAutoCancel(order.id);
 
             return reply.status(201).send({
               order: { id: order.id, orderNumber: order.orderNumber, status: order.status, totalPrice: totalPrice.toString(), location: order.location.name, items: order.items, createdAt: order.createdAt },
@@ -190,11 +259,13 @@ export async function orderRoutes(
 
       const itemsList = order.items.map(i => `• ${i.product.name} x${i.quantity}`).join('\n');
       const adminMsg = `🆕 <b>НОВЕ ЗАМОВЛЕННЯ #${order.orderNumber}</b>\n\n👤 ${user?.firstName || ''} (@${user?.username || '—'})\n📍 ${order.location.name}\n⏱ ${parsed.pickupTime} хв\n💳 ${parsed.paymentMethod}\n\n📋 <b>Склад:</b>\n${itemsList}\n\n💬 ${parsed.comment || '—'}`;
-      await sendToAdminChat(adminMsg, [[{ text: '✅ Прийняти', callback_data: `accept_${order.id}` }, { text: '❌ Відхилити', callback_data: `reject_${order.id}` }]]);
+      await notifyAdminsAboutOrder(adminMsg, [[{ text: '✅ Прийняти', callback_data: `order_accept:${order.id}` }]]);
 
       if (userTelegramId) {
         sendTelegramMessage(Number(userTelegramId), `✅ *Замовлення #${order.orderNumber} створено!*\n\n📍 ${order.location.name}\n⏱ Очікуйте ~${parsed.pickupTime} хв`).catch(() => {});
       }
+
+      scheduleAutoCancel(order.id);
 
       return reply.status(201).send({ order });
     } catch (error) {
@@ -279,13 +350,13 @@ export async function orderRoutes(
 
     const msgs: Record<string, string> = {
       PREPARING: `☕ *Бариста готує замовлення #${order.orderNumber}!*`,
-      READY: `✅ *Замовлення #${order.orderNumber} готове!*`,
+      READY: `Твоя кава чекає на тебе! ☕️`,
       COMPLETED: `🎉 *Замовлення #${order.orderNumber} виконано!*`,
       CANCELLED: `❌ *Замовлення #${order.orderNumber} скасовано.*`,
     };
     const msg = msgs[body.status];
     if (msg) sendTelegramMessage(Number(order.user.telegramId), msg).catch(() => {});
 
-    return reply.send({ success: true, order: { id, status: updated.status } });
+    return reply.send({ success: true, order: { id, status: updated.status, userTelegramId: order.user.telegramId } });
   });
 }
