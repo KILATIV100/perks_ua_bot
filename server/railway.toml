@@ -1,6 +1,6 @@
 [build]
 builder = "nixpacks"
-buildCommand = "npm run build"
+buildCommand = "npm run build" # Keep install in Nixpacks install phase only
 
 [deploy]
 startCommand = "npm run start"
