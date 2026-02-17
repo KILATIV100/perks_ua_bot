@@ -7,7 +7,9 @@ startCommand = "npm run start"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 healthcheckPath = "/health"
-healthcheckTimeout = 30
+# healthcheckTimeout = the total retry window Railway allows before failing the deploy.
+# prisma db push + db seed can take 30-60s on a cold start → use 180s as safe margin.
+healthcheckTimeout = 180
 
 [env]
 NODE_ENV = "production"

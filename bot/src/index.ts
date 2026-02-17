@@ -34,6 +34,7 @@ interface StatsResponse {
   newUsers: number;
   spins: number;
   freeDrinks: number;
+  orders: number;
   totalUsers: number;
   totalPointsInCirculation: number;
   generatedAt: string;
@@ -180,7 +181,7 @@ async function verifyCode(adminTelegramId: number, code: string): Promise<{ succ
     const response = await fetch(`${API_URL}/api/admin/verify-code`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ adminTelegramId, code: code.toUpperCase() }),
+      body: JSON.stringify({ adminTelegramId, code: code.trim() }),
     });
     const data = (await response.json()) as VerifyCodeResponse;
     if (response.ok) {
@@ -418,17 +419,24 @@ bot.command('start', async (ctx) => {
 
   if (!userId) return;
 
-  // Parse referral parameter from deep link (format: ref123456)
+  // Parse referral parameter from deep link (format: ref_ID or legacy ref123456)
   const startParam = ctx.match; // grammY extracts the payload after /start
   let referrerId: string | undefined;
   if (startParam && typeof startParam === 'string') {
-    const refMatch = startParam.match(/^ref(\d+)$/);
-    if (refMatch) {
-      referrerId = refMatch[1];
-      // Don't allow self-referral
-      if (Number(referrerId) === Number(userId)) {
-        referrerId = undefined;
-      }
+    // New format: ref_<userId>
+    const refNewMatch = startParam.match(/^ref_(.+)$/);
+    // Legacy format: ref<telegramId>
+    const refLegacyMatch = startParam.match(/^ref(\d+)$/);
+
+    if (refNewMatch) {
+      referrerId = refNewMatch[1];
+    } else if (refLegacyMatch) {
+      referrerId = refLegacyMatch[1];
+    }
+
+    // Don't allow self-referral
+    if (referrerId && (referrerId === String(userId))) {
+      referrerId = undefined;
     }
   }
 
@@ -621,15 +629,15 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
-  // Handle "Invite Friend" button (regular users)
+  // Handle "Invite Friend" button (all users)
   if (text === '🤝 Запросити друга') {
-    const refLink = `https://t.me/perkup_ua_bot?start=ref${userId}`;
+    // Use telegramId for referral links (the API resolves it)
+    const refLink = `https://t.me/perkup_ua_bot?start=ref_${userId}`;
     await ctx.reply(
       `🤝 *Запроси друга до PerkUp!*\n\n` +
         `Твоє реферальне посилання:\n` +
         `\`${refLink}\`\n\n` +
         `Після першого обертання колеса другом:\n` +
-        `• Друг отримає *+5 балів*\n` +
         `• Ти отримаєш *+10 балів*\n\n` +
         `Надішли це посилання другу! 👇`,
       {
@@ -650,7 +658,7 @@ bot.on('message:text', async (ctx) => {
     waitingForAdminId.delete(userId);
     waitingForBroadcast.delete(userId);
     await ctx.reply(
-      '🔍 Введи код купону у форматі *XX-00000* (наприклад, CO-77341):',
+      '🔍 Введи *4-значний код* купону (наприклад, 7341):',
       { parse_mode: 'Markdown' }
     );
     return;
@@ -675,7 +683,8 @@ bot.on('message:text', async (ctx) => {
       `📊 *Статистика за останні 24 години*\n\n` +
         `👥 Нових користувачів: *${stats.newUsers}*\n` +
         `🎡 Обертань колеса: *${stats.spins}*\n` +
-        `☕ Безкоштовних напоїв: *${stats.freeDrinks}*\n\n` +
+        `☕ Безкоштовних напоїв: *${stats.freeDrinks}*\n` +
+        `📦 Замовлень: *${stats.orders || 0}*\n\n` +
         `📈 *Загальна статистика:*\n` +
         `👤 Всього користувачів: *${stats.totalUsers}*\n` +
         `🪙 Балів в обігу: *${stats.totalPointsInCirculation}*\n\n` +
@@ -787,26 +796,26 @@ bot.on('message:text', async (ctx) => {
   if (waitingForCode.has(userId) && (isAdmin || isOwner)) {
     waitingForCode.delete(userId);
 
-    // Validate code format (XX-00000)
-    const codeRegex = /^[A-Za-z]{2}-\d{5}$/;
-    if (!codeRegex.test(text)) {
+    // Validate code format: 4-digit code
+    const codeRegex = /^\d{4}$/;
+    if (!codeRegex.test(text.trim())) {
       await ctx.reply(
-        '❌ Невірний формат коду.\n\nОчікується: *XX-00000* (наприклад, CO-77341)',
+        '❌ Невірний формат коду.\n\nОчікується: *4 цифри* (наприклад, 7341)',
         { parse_mode: 'Markdown' }
       );
       return;
     }
 
-    const result = await verifyCode(userId, text);
+    const result = await verifyCode(userId, text.trim());
     const keyboard = isOwner ? getOwnerKeyboard() : getAdminKeyboard();
 
     if (result.success) {
       await ctx.reply(
         `✅ *Код підтверджено!*\n\n` +
           `Клієнт: ${result.user?.firstName || 'Невідомий'}\n` +
-          `Код: \`${text.toUpperCase()}\`\n\n` +
+          `Код: \`${text.trim()}\`\n\n` +
           `💰 Списано 100 балів.\n` +
-          `☕ *Видайте напій до 100 грн!*`,
+          `☕ *Видайте напій!*`,
         { parse_mode: 'Markdown', reply_markup: keyboard }
       );
     } else {
@@ -950,7 +959,64 @@ bot.on('callback_query:data', async (ctx) => {
     return;
   }
 
-  // Handle "Accept order" button
+  // Handle order status transitions from Admin Chat inline buttons
+  // Format: order_<action>:<orderId>
+  const orderMatch = data.match(/^order_(accept|reject|ready|complete):(.+)$/);
+  if (orderMatch) {
+    const [, action, orderId] = orderMatch;
+
+    const statusMap: Record<string, string> = {
+      accept: 'CONFIRMED',
+      reject: 'REJECTED',
+      ready: 'READY',
+      complete: 'COMPLETED',
+    };
+
+    const newStatus = statusMap[action];
+    if (!newStatus) {
+      await ctx.answerCallbackQuery({ text: '❌ Невідома дія' });
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/api/orders/${orderId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminTelegramId: String(userId),
+          status: newStatus,
+        }),
+      });
+
+      if (response.ok) {
+        const adminName = ctx.from?.first_name || `Admin ${userId}`;
+        const actionLabels: Record<string, string> = {
+          accept: '✅ Прийнято',
+          reject: '❌ Відхилено',
+          ready: '🔔 Готово',
+          complete: '✅ Завершено',
+        };
+
+        await ctx.answerCallbackQuery({ text: `${actionLabels[action]}!` });
+
+        // Update the message to show who processed the order
+        const originalText = ctx.callbackQuery.message?.text || '';
+        await ctx.editMessageText(
+          originalText + `\n\n${actionLabels[action]} — ${adminName}`,
+          { parse_mode: 'HTML' }
+        );
+      } else {
+        const err = (await response.json()) as { error?: string; message?: string };
+        await ctx.answerCallbackQuery({ text: `❌ ${err.message || err.error || 'Помилка'}` });
+      }
+    } catch (error) {
+      console.error(`[Order ${action}] Error:`, error);
+      await ctx.answerCallbackQuery({ text: '❌ Помилка з\'єднання' });
+    }
+    return;
+  }
+
+  // Handle legacy order_accept: format
   if (data.startsWith('order_accept:')) {
     const orderId = data.replace('order_accept:', '');
 
@@ -960,7 +1026,7 @@ bot.on('callback_query:data', async (ctx) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           adminTelegramId: String(userId),
-          status: 'PREPARING',
+          status: 'CONFIRMED',
         }),
       });
 
@@ -968,7 +1034,7 @@ bot.on('callback_query:data', async (ctx) => {
         await ctx.answerCallbackQuery({ text: '✅ Замовлення прийнято!' });
         const adminName = ctx.from?.first_name || `Admin ${userId}`;
         await ctx.editMessageText(
-          ctx.callbackQuery.message?.text + `\n\n✅ *Прийнято в роботу* — ${adminName}`,
+          (ctx.callbackQuery.message?.text || '') + `\n\n✅ *Прийнято в роботу* — ${adminName}`,
           { parse_mode: 'Markdown' }
         );
       } else {
