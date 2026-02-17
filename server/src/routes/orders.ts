@@ -36,35 +36,20 @@ async function sendTelegramMessage(
 const CreateOrderSchema = z.object({
   telegramId: z.union([z.number(), z.string()]).transform(String),
   locationId: z.string().uuid(),
-  paymentMethod: z.enum(['cash', 'telegram_pay']).default('cash'),
-  deliveryType: z.enum(['pickup', 'shipping']).default('pickup'),
-  pickupMinutes: z.number().int().min(5).max(30).optional(),
-  shippingAddr: z.string().min(5).optional(),
-  phone: z.string().min(6).optional(),
+  paymentMethod: z.enum(['CASH', 'CARD']).default('CASH'),
+  pickupTime: z.number().int().min(5).max(60).optional(),
   items: z.array(
     z.object({
       productId: z.string().uuid(),
-      name: z.string().min(1),
       quantity: z.number().int().positive(),
       price: z.number().positive(),
     })
   ).min(1),
-}).superRefine((data, ctx) => {
-  if (data.deliveryType === 'shipping') {
-    if (!data.shippingAddr) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['shippingAddr'], message: 'Shipping address is required' });
-    }
-    if (!data.phone) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['phone'], message: 'Phone is required' });
-    }
-  } else if (!data.pickupMinutes) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pickupMinutes'], message: 'Pickup minutes are required' });
-  }
 });
 
 const UpdateStatusSchema = z.object({
   adminTelegramId: z.union([z.number(), z.string()]).transform(String),
-  status: z.enum(['PREPARING', 'READY', 'COMPLETED', 'CANCELLED']),
+  status: z.enum(['PREPARING', 'READY', 'COMPLETED', 'REJECTED']),
 });
 
 type CreateOrderBody = z.infer<typeof CreateOrderSchema>;
@@ -74,7 +59,7 @@ export async function orderRoutes(
   _opts: FastifyPluginOptions
 ) {
   // Create new order
-  app.post<{ Body: CreateOrderBody }>('', async (request, reply) => {
+  app.post<{ Body: CreateOrderBody }>('/', async (request, reply) => {
     const parseResult = CreateOrderSchema.safeParse(request.body);
 
     if (!parseResult.success) {
@@ -84,8 +69,8 @@ export async function orderRoutes(
       });
     }
 
-    const { telegramId, locationId, items, paymentMethod, pickupMinutes, deliveryType, shippingAddr, phone } = parseResult.data;
-    const resolvedPickupMinutes = deliveryType === 'shipping' ? 10 : (pickupMinutes ?? 10);
+    const { telegramId, locationId, items, paymentMethod, pickupTime } = parseResult.data;
+    const resolvedPickupTime = pickupTime ?? 10;
 
     // Find user
     const user = await app.prisma.user.findUnique({
@@ -105,16 +90,16 @@ export async function orderRoutes(
       return reply.status(404).send({ error: 'Location not found' });
     }
 
-    if (location.status === 'coming_soon') {
+    if (!location.isActive) {
       return reply.status(400).send({ error: 'Location is not yet available for orders' });
     }
 
-    if (!location.canPreorder) {
+    if (!location.hasOrdering) {
       return reply.status(400).send({ error: 'Попереднє замовлення недоступне для цієї локації. Замовляйте на місці!' });
     }
 
-    // Calculate total price
-    const totalPrice = items.reduce(
+    // Calculate total
+    const total = items.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0
     );
@@ -124,18 +109,16 @@ export async function orderRoutes(
       data: {
         userId: user.id,
         locationId,
-        totalPrice,
+        total,
+        subtotal: total,
         paymentMethod,
-        pickupMinutes: resolvedPickupMinutes,
-        deliveryType,
-        shippingAddr: deliveryType === 'shipping' ? shippingAddr : null,
-        phone: deliveryType === 'shipping' ? phone : null,
+        pickupTime: resolvedPickupTime,
         items: {
           create: items.map((item) => ({
             productId: item.productId,
-            name: item.name,
             quantity: item.quantity,
             price: item.price,
+            total: item.price * item.quantity,
           })),
         },
       },
@@ -145,24 +128,22 @@ export async function orderRoutes(
       },
     });
 
-    app.log.info(`[Order Created] id: ${order.id}, user: ${telegramId}, total: ${totalPrice}, location: ${location.name}`);
+    app.log.info(`[Order Created] id: ${order.id}, user: ${telegramId}, total: ${total}, location: ${location.name}`);
 
     // Build order details for notification
-    const itemsList = items.map(i => `  • ${i.name} x${i.quantity} — ${i.price * i.quantity} грн`).join('\n');
-    const paymentLabel = paymentMethod === 'cash' ? 'При отриманні' : 'Telegram Pay';
+    const itemsList = items.map(i => `  • x${i.quantity} — ${i.price * i.quantity} грн`).join('\n');
+    const paymentLabel = paymentMethod === 'CASH' ? 'Готівка' : 'Картка';
     const userName = user.firstName || user.username || `ID: ${telegramId}`;
 
-    const deliveryInfo = deliveryType === 'shipping'
-      ? `🚚 Доставка: ${shippingAddr}\n📞 Телефон: ${phone}\n\n`
-      : `⏱ Час готовності: ${resolvedPickupMinutes} хв\n\n`;
+    const pickupInfo = `⏱ Час готовності: ${resolvedPickupTime} хв\n\n`;
 
     const adminMessage =
       `🆕 *Нове замовлення!*\n\n` +
       `👤 Клієнт: ${userName}\n` +
       `📍 Локація: ${location.name}\n` +
-      `💰 Сума: *${totalPrice} грн*\n` +
+      `💰 Сума: *${total} грн*\n` +
       `💳 Оплата: ${paymentLabel}\n` +
-      deliveryInfo +
+      pickupInfo +
       `📋 *Замовлення:*\n${itemsList}`;
 
     const acceptButton = [[
@@ -186,10 +167,8 @@ export async function orderRoutes(
       Number(telegramId),
       `✅ *Замовлення прийнято!*\n\n` +
       `📍 ${location.name}\n` +
-      `💰 Сума: *${totalPrice} грн*\n` +
-      (deliveryType === 'shipping'
-        ? `🚚 Ми зв'яжемося з вами щодо доставки.\n\n`
-        : `⏱ Очікуйте ~${resolvedPickupMinutes} хв\n\n`) +
+      `💰 Сума: *${total} грн*\n` +
+      `⏱ Очікуйте ~${resolvedPickupTime} хв\n\n` +
       `Ми повідомимо, коли бариста почне готувати!`
     ).catch(err => {
       app.log.error({ err }, 'Failed to notify user about order');
@@ -199,21 +178,18 @@ export async function orderRoutes(
       order: {
         id: order.id,
         status: order.status,
-        totalPrice: order.totalPrice.toString(),
+        total: order.total.toString(),
         location: order.location.name,
         items: order.items,
         paymentMethod,
-        pickupMinutes: resolvedPickupMinutes,
-        deliveryType,
-        shippingAddr: deliveryType === 'shipping' ? shippingAddr : null,
-        phone: deliveryType === 'shipping' ? phone : null,
+        pickupTime: resolvedPickupTime,
         createdAt: order.createdAt,
       },
     });
   });
 
   // PATCH /api/orders/:id/status - Update order status (Admin/Owner)
-  app.patch<{ Params: { id: string } }>(':id/status', async (request, reply) => {
+  app.patch<{ Params: { id: string } }>('/:id/status', async (request, reply) => {
     try {
       const { id } = request.params;
       const body = UpdateStatusSchema.parse(request.body);
@@ -246,16 +222,11 @@ export async function orderRoutes(
       });
 
       // Notify user about status change
-      const isShipping = order.deliveryType === 'shipping';
       const statusMessages: Record<string, string> = {
-        PREPARING: isShipping
-          ? `📦 *Ми готуємо твоє замовлення до відправки!*\n\n📍 ${order.location.name}`
-          : `☕ *Бариста почав готувати твоє замовлення!*\n\n📍 ${order.location.name}\nБуде готово через ~${order.pickupMinutes} хв`,
-        READY: isShipping
-          ? `✅ *Замовлення готове до відправки!*\n\nМи надішлемо інформацію про доставку найближчим часом.`
-          : `✅ *Твоє замовлення готове!*\n\n📍 ${order.location.name}\nМожеш забирати! 🎉`,
+        PREPARING: `☕ *Бариста почав готувати твоє замовлення!*\n\n📍 ${order.location.name}${order.pickupTime ? `\nБуде готово через ~${order.pickupTime} хв` : ''}`,
+        READY: `✅ *Твоє замовлення готове!*\n\n📍 ${order.location.name}\nМожеш забирати! 🎉`,
         COMPLETED: `🎉 *Замовлення виконано!*\nДякуємо, що обрав PerkUp! ☕`,
-        CANCELLED: `❌ *Замовлення скасовано.*\nВибач за незручності. Спробуй пізніше!`,
+        REJECTED: `❌ *Замовлення скасовано.*\nВибач за незручності. Спробуй пізніше!`,
       };
 
       const userMessage = statusMessages[body.status];
@@ -277,7 +248,7 @@ export async function orderRoutes(
 
   // Get orders by telegram user
   app.get<{ Querystring: { telegramId: string } }>(
-    '',
+    '/',
     async (request, reply) => {
       const { telegramId } = request.query;
 
@@ -307,14 +278,11 @@ export async function orderRoutes(
         orders: orders.map((order: (typeof orders)[number]) => ({
           id: order.id,
           status: order.status,
-          totalPrice: order.totalPrice.toString(),
+          total: order.total.toString(),
           location: order.location.name,
           items: order.items,
           paymentMethod: order.paymentMethod,
-          pickupMinutes: order.pickupMinutes,
-          deliveryType: order.deliveryType,
-          shippingAddr: order.shippingAddr,
-          phone: order.phone,
+          pickupTime: order.pickupTime,
           createdAt: order.createdAt,
         })),
       });
@@ -322,7 +290,7 @@ export async function orderRoutes(
   );
 
   // Get order by ID
-  app.get<{ Params: { id: string } }>(':id', async (request, reply) => {
+  app.get<{ Params: { id: string } }>('/:id', async (request, reply) => {
     const { id } = request.params;
 
     const order = await app.prisma.order.findUnique({
@@ -341,14 +309,11 @@ export async function orderRoutes(
       order: {
         id: order.id,
         status: order.status,
-        totalPrice: order.totalPrice.toString(),
+        total: order.total.toString(),
         location: order.location,
         items: order.items,
         paymentMethod: order.paymentMethod,
-        pickupMinutes: order.pickupMinutes,
-        deliveryType: order.deliveryType,
-        shippingAddr: order.shippingAddr,
-        phone: order.phone,
+        pickupTime: order.pickupTime,
         createdAt: order.createdAt,
       },
     });

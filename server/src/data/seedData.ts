@@ -1,38 +1,46 @@
-import { LocationStatus, ProductType } from '@prisma/client';
+import { ProductType } from '@prisma/client';
 
 export interface LocationSeed {
+  slug: string;
   name: string;
-  lat: number | null;
-  long: number | null;
+  latitude: number | null;
+  longitude: number | null;
   address: string;
-  status: LocationStatus;
-  canPreorder: boolean;
+  hasOrdering: boolean;
+  isViewOnly: boolean;
+  isActive: boolean;
 }
 
 export const seedLocations: LocationSeed[] = [
   {
+    slug: 'mark-mall',
     name: 'Mark Mall',
-    lat: 50.51485367479439,
-    long: 30.78219892858682,
+    latitude: 50.51485367479439,
+    longitude: 30.78219892858682,
     address: 'ТРЦ Mark Mall, Бровари',
-    status: 'active',
-    canPreorder: false,
+    hasOrdering: false,
+    isViewOnly: false,
+    isActive: true,
   },
   {
+    slug: 'park-pryozernyi',
     name: 'Парк "Приозерний"',
-    lat: 50.50128659421246,
-    long: 30.754029265863245,
+    latitude: 50.50128659421246,
+    longitude: 30.754029265863245,
     address: 'Парк Приозерний, Бровари',
-    status: 'active',
-    canPreorder: true,
+    hasOrdering: true,
+    isViewOnly: false,
+    isActive: true,
   },
   {
+    slug: 'zhk-lisovyi-kvartal',
     name: 'ЖК "Лісовий квартал"',
-    lat: 50.51758555255138,
-    long: 30.783235338021694,
+    latitude: 50.51758555255138,
+    longitude: 30.783235338021694,
     address: 'ЖК Лісовий квартал, Бровари',
-    status: 'coming_soon',
-    canPreorder: false,
+    hasOrdering: false,
+    isViewOnly: true,
+    isActive: true,
   },
 ];
 
