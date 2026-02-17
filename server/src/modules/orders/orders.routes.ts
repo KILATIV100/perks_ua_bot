@@ -16,7 +16,7 @@ import { sendTelegramMessage } from '../../shared/utils/telegram.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
-const AUTO_CANCEL_DELAY_MS = 5 * 60 * 1000;
+const AUTO_CANCEL_DELAY_MS = 3 * 60 * 1000;
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -134,7 +134,7 @@ export async function orderRoutes(
         );
 
         await notifyAdminsAboutOrder(
-          `❌ <b>Замовлення #${cancelledOrder.orderNumber} автоматично скасовано</b> (минуло 5 хв)`,
+          `❌ <b>Замовлення #${cancelledOrder.orderNumber} автоматично скасовано</b> (минуло 3 хв)`,
         );
       } catch (error) {
         app.log.error({ err: error, orderId }, 'Order auto-cancel failed');

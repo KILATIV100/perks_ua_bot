@@ -52,7 +52,7 @@ const UpdateStatusSchema = z.object({
   status: z.enum(['PREPARING', 'READY', 'COMPLETED', 'REJECTED']),
 });
 
-const AUTO_CANCEL_DELAY_MS = 5 * 60 * 1000;
+const AUTO_CANCEL_DELAY_MS = 3 * 60 * 1000;
 
 type CreateOrderBody = z.infer<typeof CreateOrderSchema>;
 
@@ -92,7 +92,7 @@ export async function orderRoutes(
           select: { telegramId: true },
         });
 
-        const adminText = `❌ Замовлення #${cancelledOrder.orderNumber} автоматично скасовано (минуло 5 хв)`;
+        const adminText = `❌ Замовлення #${cancelledOrder.orderNumber} автоматично скасовано (минуло 3 хв)`;
 
         for (const admin of admins) {
           sendTelegramMessage(Number(admin.telegramId), adminText).catch((err) => {
