@@ -103,7 +103,7 @@ const CreateOrderSchema = z.object({
 
 const UpdateStatusSchema = z.object({
   adminTelegramId: z.union([z.number(), z.string()]).transform(String),
-  status: z.enum(['PREPARING', 'READY', 'COMPLETED', 'CANCELLED']),
+  status: z.enum(['PREPARING', 'READY', 'COMPLETED', 'REJECTED']),
 });
 
 type CreateOrderBody = z.infer<typeof CreateOrderSchema>;
@@ -151,11 +151,11 @@ export async function orderRoutes(
       return reply.status(404).send({ error: 'Location not found' });
     }
 
-    if (location.status === 'coming_soon') {
+    if (!location.isActive) {
       return reply.status(400).send({ error: 'Location is not yet available for orders' });
     }
 
-    if (!location.canPreorder) {
+    if (!location.hasOrdering) {
       return reply.status(400).send({ error: 'Попереднє замовлення недоступне для цієї локації. Замовляйте на місці!' });
     }
 
@@ -202,7 +202,7 @@ export async function orderRoutes(
       `📍 Локація: ${location.name}\n` +
       `💰 Сума: *${Number((order as any).totalPrice ?? totalPrice)} грн*\n` +
       `💳 Оплата: ${paymentLabel}\n` +
-      deliveryInfo +
+      pickupInfo +
       `📋 *Замовлення:*\n${itemsList}`;
 
     const actionButtons = [[

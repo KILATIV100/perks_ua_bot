@@ -15,12 +15,6 @@ interface WheelOfFortuneProps {
   };
 }
 
-// Check for dev/admin mode in URL
-const isDevMode = () => {
-  const urlParams = new URLSearchParams(window.location.search);
-  return urlParams.get('dev') === 'true' || urlParams.get('admin') === 'true';
-};
-
 // Wheel segments with colors
 const SEGMENTS = [
   { value: 5, color: '#FFD700', label: '5' },
@@ -108,27 +102,21 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
     setShowResult(false);
     setResult(null);
 
-    const devMode = isDevMode();
     let location: { lat: number; lng: number } | null = null;
 
-    // Skip location request in dev mode
-    if (!devMode) {
-      setIsGettingLocation(true);
-      try {
-        location = await requestLocation();
-      } catch (error) {
-        setIsGettingLocation(false);
-        if (error instanceof Error) {
-          setLocationError(error.message);
-        } else {
-          setLocationError('Сталася помилка при отриманні геопозиції');
-        }
-        return;
-      }
+    setIsGettingLocation(true);
+    try {
+      location = await requestLocation();
+    } catch (error) {
       setIsGettingLocation(false);
-    } else {
-      console.log('[Dev Mode] Skipping geolocation check');
+      if (error instanceof Error) {
+        setLocationError(error.message);
+      } else {
+        setLocationError('Сталася помилка при отриманні геопозиції');
+      }
+      return;
     }
+    setIsGettingLocation(false);
 
     setIsSpinning(true);
 
@@ -261,13 +249,6 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
         </p>
       )}
 
-      {/* Dev Mode indicator */}
-      {isDevMode() && (
-        <div className="mb-4 p-2 rounded-lg text-center" style={{ backgroundColor: '#E0F2FE' }}>
-          <p className="text-sm text-blue-700 font-medium">🛠 Dev Mode: геолокація вимкнена</p>
-        </div>
-      )}
-
       {/* Rules */}
       <div
         className="mt-8 p-4 rounded-xl w-full max-w-sm"
@@ -279,7 +260,7 @@ export function WheelOfFortune({ onSpin, canSpin, nextSpinAt, theme }: WheelOfFo
         <ul className="text-sm space-y-1" style={{ color: theme.hintColor }}>
           <li>• Крутіть колесо раз на добу</li>
           <li>• Виграйте 5, 10 або 15 балів</li>
-          {!isDevMode() && <li>• <strong>Будьте поруч з кав'ярнею</strong> (до 100м)</li>}
+          <li>• <strong>Будьте поруч з кав'ярнею</strong> (до 100м)</li>
           <li>• Бали можна обміняти на знижки</li>
         </ul>
       </div>
