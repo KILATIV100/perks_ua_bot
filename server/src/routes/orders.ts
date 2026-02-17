@@ -92,10 +92,25 @@ const UpdateStatusSchema = z.object({
 
 type CreateOrderBody = z.infer<typeof CreateOrderSchema>;
 
+type OrderStatusLiteral = 'PENDING' | 'PREPARING' | 'READY' | 'COMPLETED' | 'CANCELLED' | 'CANCELED';
+
+async function updateOrderStatus(prismaOrder: any, id: string, status: OrderStatusLiteral): Promise<any> {
+  try {
+    return await prismaOrder.update({ where: { id }, data: { status } });
+  } catch (error) {
+    if (status === 'CANCELLED') {
+      return prismaOrder.update({ where: { id }, data: { status: 'CANCELED' } });
+    }
+    throw error;
+  }
+}
+
 export async function orderRoutes(
   app: FastifyInstance,
   _opts: FastifyPluginOptions
 ) {
+  const prismaOrder = app.prisma.order as any;
+
   app.post<{ Body: CreateOrderBody }>('', async (request, reply) => {
     const parseResult = CreateOrderSchema.safeParse(request.body);
 
@@ -106,8 +121,8 @@ export async function orderRoutes(
       });
     }
 
-    const { telegramId, locationId, items, paymentMethod, pickupTime } = parseResult.data;
-    const resolvedPickupTime = pickupTime ?? 10;
+    const { telegramId, locationId, items, paymentMethod, pickupMinutes, deliveryType, shippingAddr, phone } = parseResult.data;
+    const resolvedPickupMinutes = deliveryType === 'shipping' ? 10 : (pickupMinutes ?? 10);
 
     const user = await app.prisma.user.findUnique({ where: { telegramId } });
     if (!user) {
@@ -129,7 +144,7 @@ export async function orderRoutes(
 
     const totalPrice = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-    const order = await app.prisma.order.create({
+    const order = await prismaOrder.create({
       data: {
         userId: user.id,
         locationId,
@@ -153,7 +168,7 @@ export async function orderRoutes(
     });
 
     const itemsList = items.map(i => `  • ${i.name} x${i.quantity} — ${i.price * i.quantity} грн`).join('\n');
-    const paymentLabel = paymentMethod === 'cash' ? 'При отриманні' : 'Telegram Pay';
+    const paymentLabel = ['cash', 'CASH'].includes(String(paymentMethod)) ? 'При отриманні' : 'Картка';
     const userName = user.firstName || user.username || `ID: ${telegramId}`;
 
     const pickupInfo = `⏱ Час готовності: ${resolvedPickupTime} хв\n\n`;
@@ -162,7 +177,7 @@ export async function orderRoutes(
       `🆕 *Нове замовлення #${order.id.slice(0, 8)}*\n\n` +
       `👤 Клієнт: ${userName}\n` +
       `📍 Локація: ${location.name}\n` +
-      `💰 Сума: *${total} грн*\n` +
+      `💰 Сума: *${Number((order as any).totalPrice ?? totalPrice)} грн*\n` +
       `💳 Оплата: ${paymentLabel}\n` +
       pickupInfo +
       `📋 *Замовлення:*\n${itemsList}`;
@@ -188,7 +203,7 @@ export async function orderRoutes(
 
     setTimeout(async () => {
       try {
-        const current = await app.prisma.order.findUnique({
+        const current = await prismaOrder.findUnique({
           where: { id: order.id },
           include: { user: { select: { telegramId: true } } },
         });
@@ -197,10 +212,7 @@ export async function orderRoutes(
           return;
         }
 
-        await app.prisma.order.update({
-          where: { id: order.id },
-          data: { status: 'CANCELLED' },
-        });
+        await updateOrderStatus(prismaOrder, order.id, 'CANCELLED');
 
         await sendTelegramMessage(
           Number(current.user.telegramId),
@@ -225,7 +237,7 @@ export async function orderRoutes(
       order: {
         id: order.id,
         status: order.status,
-        total: order.total.toString(),
+        totalPrice: String((order as any).totalPrice ?? (order as any).total ?? 0),
         location: order.location.name,
         items: order.items,
         paymentMethod,
@@ -245,7 +257,7 @@ export async function orderRoutes(
         return reply.status(403).send({ error: 'Access denied' });
       }
 
-      const order = await app.prisma.order.findUnique({
+      const order = await prismaOrder.findUnique({
         where: { id },
         include: {
           user: { select: { telegramId: true } },
@@ -257,20 +269,17 @@ export async function orderRoutes(
         return reply.status(404).send({ error: 'Order not found' });
       }
 
-      if (order.status === 'CANCELLED' || order.status === 'COMPLETED') {
+      if ((order.status === 'CANCELLED' || order.status === 'CANCELED') || order.status === 'COMPLETED') {
         return reply.status(409).send({ error: `Order already ${order.status.toLowerCase()}` });
       }
 
-      const updated = await app.prisma.order.update({
-        where: { id },
-        data: { status: body.status },
-      });
+      const updated = await updateOrderStatus(prismaOrder, id, body.status as OrderStatusLiteral);
 
-      const isShipping = order.deliveryType === 'shipping';
+      const isShipping = (order.deliveryType ?? 'pickup') === 'shipping';
       const statusMessages: Record<string, string> = {
         PREPARING: isShipping
           ? `📦 *Ми готуємо твоє замовлення до відправки!*\n\n📍 ${order.location.name}`
-          : `✅ Замовлення прийнято! Бариста почав готувати. Буде готово через ~${order.pickupMinutes} хв.`,
+          : `✅ Замовлення прийнято! Бариста почав готувати. Буде готово через ~${order.pickupMinutes ?? order.pickupTime ?? 10} хв.`,
         READY: isShipping
           ? `✅ *Замовлення готове до відправки!*\n\nМи надішлемо інформацію про доставку найближчим часом.`
           : `✅ *Твоє замовлення готове!*\n\n📍 ${order.location.name}\nМожеш забирати! 🎉`,
@@ -285,7 +294,7 @@ export async function orderRoutes(
         });
       }
 
-      return reply.send({ success: true, order: { id, status: updated.status, pickupMinutes: updated.pickupMinutes } });
+      return reply.send({ success: true, order: { id, status: updated.status, pickupMinutes: updated.pickupMinutes ?? updated.pickupTime ?? 10 } });
     } catch (error) {
       app.log.error({ err: error }, 'Update order status error');
       if (error instanceof z.ZodError) {
@@ -307,7 +316,7 @@ export async function orderRoutes(
       return reply.send({ orders: [] });
     }
 
-    const orders = await app.prisma.order.findMany({
+    const orders = await prismaOrder.findMany({
       where: { userId: user.id },
       include: {
         items: true,
@@ -321,14 +330,14 @@ export async function orderRoutes(
       orders: orders.map((savedOrder: (typeof orders)[number]) => ({
         id: savedOrder.id,
         status: savedOrder.status,
-        totalPrice: savedOrder.totalPrice.toString(),
+        totalPrice: String((savedOrder as any).totalPrice ?? (savedOrder as any).total ?? 0),
         location: savedOrder.location.name,
         items: savedOrder.items,
         paymentMethod: savedOrder.paymentMethod,
-        pickupMinutes: savedOrder.pickupMinutes,
-        deliveryType: savedOrder.deliveryType,
-        shippingAddr: savedOrder.shippingAddr,
-        phone: savedOrder.phone,
+        pickupMinutes: (savedOrder as any).pickupMinutes ?? (savedOrder as any).pickupTime ?? 10,
+        deliveryType: (savedOrder as any).deliveryType ?? 'pickup',
+        shippingAddr: (savedOrder as any).shippingAddr ?? null,
+        phone: (savedOrder as any).phone ?? null,
         createdAt: savedOrder.createdAt,
       })),
     });
@@ -337,7 +346,7 @@ export async function orderRoutes(
   app.get<{ Params: { id: string } }>(':id', async (request, reply) => {
     const { id } = request.params;
 
-    const order = await app.prisma.order.findUnique({
+    const order = await prismaOrder.findUnique({
       where: { id },
       include: {
         items: true,
@@ -353,11 +362,14 @@ export async function orderRoutes(
       order: {
         id: order.id,
         status: order.status,
-        total: order.total.toString(),
+        totalPrice: String((order as any).totalPrice ?? (order as any).total ?? 0),
         location: order.location,
         items: order.items,
         paymentMethod: order.paymentMethod,
-        pickupTime: order.pickupTime,
+        pickupMinutes: (order as any).pickupMinutes ?? (order as any).pickupTime ?? 10,
+        deliveryType: (order as any).deliveryType ?? 'pickup',
+        shippingAddr: (order as any).shippingAddr ?? null,
+        phone: (order as any).phone ?? null,
         createdAt: order.createdAt,
       },
     });
