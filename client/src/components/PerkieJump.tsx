@@ -65,6 +65,14 @@ interface LevelConfig {
 
 const PLAYER_HITBOX = { offsetX: 6, offsetY: 5, width: PLAYER_W - 12, height: PLAYER_H - 10 };
 
+
+const MODE_OPTIONS: Array<{ id: GameMode; label: string }> = [
+  { id: 'classic', label: 'Класичний' },
+  { id: 'timed', label: 'На час (60с)' },
+  { id: 'survival', label: 'Виживання' },
+  { id: 'racing', label: 'Гонка' },
+];
+
 const LEVELS: LevelConfig[] = [
   { level: 1, minScore: 0, maxScore: 999, platformWidth: 110, gapMin: 72, gapMax: 102, movingChance: 0.0, fragileChance: 0.0, movingSpeed: 0, difficulty: 'easy' },
   { level: 2, minScore: 1000, maxScore: 2499, platformWidth: 92, gapMin: 86, gapMax: 128, movingChance: 0.35, fragileChance: 0.0, movingSpeed: 1.5, difficulty: 'medium' },
@@ -587,12 +595,7 @@ export function PerkieJump({ telegramId, apiUrl, onScoreSubmit, mascotSrc = '/pe
       {phase === 'menu' && (
         <div className="w-full max-w-[390px] space-y-3">
           <div className="grid grid-cols-2 gap-2">
-            {([
-              { id: 'classic', label: 'Класичний' },
-              { id: 'timed', label: 'На час (60с)' },
-              { id: 'survival', label: 'Виживання' },
-              { id: 'racing', label: 'Гонка' },
-            ] as Array<{ id: GameMode; label: string }>).map((mode) => (
+            {MODE_OPTIONS.map((mode) => (
               <button
                 key={mode.id}
                 className="px-3 py-3 rounded-xl text-sm font-bold"
