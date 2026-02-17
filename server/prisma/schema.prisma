@@ -243,6 +243,17 @@ model DailyGameLimit {
   @@map("daily_game_limits")
 }
 
+model Track {
+  id        String   @id @default(cuid())
+  title     String
+  artist    String
+  url       String
+  coverUrl  String?
+  createdAt DateTime @default(now())
+
+  @@map("tracks")
+}
+
 model RadioTrack {
   id        String      @id @default(cuid())
   title     String

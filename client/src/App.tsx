@@ -5,7 +5,6 @@ import { WheelOfFortune } from './components/WheelOfFortune';
 import { Menu, CartItem } from './components/Menu';
 import { Radio } from './components/Radio';
 import { TicTacToe } from './components/TicTacToe';
-import { PerkyJump } from './components/PerkyJump';
 import { Checkout } from './components/Checkout';
 
 type TabType = 'locations' | 'menu' | 'shop' | 'games' | 'bonuses';
@@ -69,7 +68,7 @@ function App() {
   const [showTerms, setShowTerms] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [gameMode] = useState<'online' | 'offline'>('offline');
-  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe' | 'perky_jump'>('tic_tac_toe');
+  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe'>('tic_tac_toe');
   const [isGameFullscreen, setIsGameFullscreen] = useState(false);
   const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
@@ -351,39 +350,33 @@ function App() {
             <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
               <h2 className="text-xl font-bold mb-2">🎮 Fun Zone</h2>
               <p className="text-sm" style={{ color: theme.hintColor }}>
-                Обирай гру або вмикай PerkUp Radio.
+                Грай у гру або вмикай PerkUp Radio.
               </p>
-              <div className="grid grid-cols-2 gap-2 mt-4">
-                {[
-                  { id: 'tic_tac_toe', label: 'Хрестики-нулики', icon: '❌⭕' },
-                  { id: 'perky_jump', label: 'Perky Jump', icon: '🪂' },
-                ].map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      setFunZoneGame(item.id as typeof funZoneGame);
-                      setIsGameFullscreen(true);
-                    }}
-                    className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
-                    style={{
-                      backgroundColor: funZoneGame === item.id ? theme.buttonColor : theme.secondaryBgColor,
-                      color: funZoneGame === item.id ? theme.buttonTextColor : theme.textColor,
-                    }}
-                  >
-                    <span>{item.icon}</span>
-                    <span className="truncate">{item.label}</span>
-                  </button>
-                ))}
+              <div className="grid grid-cols-1 gap-2 mt-4">
+                <button
+                  onClick={() => {
+                    setFunZoneGame('tic_tac_toe');
+                    setIsGameFullscreen(true);
+                  }}
+                  className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
+                  style={{
+                    backgroundColor: theme.buttonColor,
+                    color: theme.buttonTextColor,
+                  }}
+                >
+                  <span>❌⭕</span>
+                  <span className="truncate">Хрестики-нулики</span>
+                </button>
               </div>
             </div>
 
-            <Radio theme={theme} />
+            <Radio theme={theme} apiUrl={API_URL} />
 
             {isGameFullscreen && (
               <div className="fixed inset-0 z-50 flex flex-col" style={{ backgroundColor: theme.bgColor }}>
                 <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: `${theme.hintColor}30` }}>
                   <h3 className="font-semibold" style={{ color: theme.textColor }}>
-                    {funZoneGame === 'tic_tac_toe' ? 'Хрестики-нулики' : 'Perky Jump'}
+                    Хрестики-нулики
                   </h3>
                   <button
                     onClick={() => setIsGameFullscreen(false)}
@@ -408,14 +401,7 @@ function App() {
                       </div>
                     )
                   )}
-                  {funZoneGame === 'perky_jump' && (
-                    <PerkyJump
-                      apiUrl={API_URL}
-                      telegramId={telegramUser ? String(telegramUser.id) : undefined}
-                      onPointsEarned={(pts) => setAppUser((prev: any) => prev ? { ...prev, points: (prev.points || 0) + pts } : prev)}
-                    />
-                  )}
-                </div>
+               </div>
               </div>
             )}
           </div>
