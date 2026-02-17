@@ -1,0 +1,9 @@
+# Keep install/build phases separate to avoid EBUSY on /app/node_modules/.cache in Railway.
+# Nixpacks mounts node_modules/.cache as a cache volume, so running npm ci in build phase
+# (after install already ran npm ci) can fail while trying to remove that directory.
+
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm run build"]

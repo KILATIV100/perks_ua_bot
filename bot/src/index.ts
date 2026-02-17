@@ -72,6 +72,7 @@ interface AddPointsResponse {
 // Environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const API_URL = process.env.API_URL || 'https://backend-production-5ee9.up.railway.app';
+const ADMIN_GROUP_ID = Number(process.env.ADMIN_GROUP_ID || 0);
 
 // WebApp URL - perkup.com.ua
 const WEB_APP_URL = 'https://perkup.com.ua';
@@ -191,6 +192,13 @@ async function verifyCode(adminTelegramId: number, code: string): Promise<{ succ
     console.error('[API] Failed to verify code:', error);
     return { success: false, message: 'Помилка з\'єднання з сервером' };
   }
+}
+
+function normalizeVerificationCode(text: string): string | null {
+  const trimmed = text.trim().toUpperCase();
+  if (/^\d{4}$/.test(trimmed)) return trimmed;
+  if (/^[A-Z]{2}-\d{5}$/.test(trimmed)) return trimmed;
+  return null;
 }
 
 /**
@@ -610,6 +618,39 @@ bot.on('message:text', async (ctx) => {
 
   if (!userId) return;
 
+  const isAdminGroupChat = Boolean(ADMIN_GROUP_ID) && ctx.chat?.id === ADMIN_GROUP_ID;
+
+  // Group workflow for baristas: /verify <code> or plain 4 digits
+  if (isAdminGroupChat) {
+    const { isAdmin, isOwner } = await getUserRole(userId);
+    if (!(isAdmin || isOwner)) {
+      return;
+    }
+
+    const verifyCommandMatch = text.match(/^\/verify(?:@[A-Za-z0-9_]+)?\s+(.+)$/i);
+    const rawCode = verifyCommandMatch ? verifyCommandMatch[1] : text;
+    const normalizedCode = normalizeVerificationCode(rawCode);
+
+    if (!normalizedCode) {
+      return;
+    }
+
+    const result = await verifyCode(userId, normalizedCode);
+    if (result.success) {
+      await ctx.reply(
+        `✅ *Код підтверджено!*\n\n` +
+          `Клієнт: ${result.user?.firstName || 'Невідомий'}\n` +
+          `Код: \`${normalizedCode}\`\n\n` +
+          `💰 Списано 100 балів.\n` +
+          `☕ *Видайте напій до 100 грн!*`,
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      await ctx.reply(`❌ ${result.message}`);
+    }
+    return;
+  }
+
   const { isAdmin, isOwner } = await getUserRole(userId);
 
   // Handle "Back" button (Owner only) - return to main menu
@@ -650,7 +691,7 @@ bot.on('message:text', async (ctx) => {
     waitingForAdminId.delete(userId);
     waitingForBroadcast.delete(userId);
     await ctx.reply(
-      '🔍 Введи код купону у форматі *XX-00000* (наприклад, CO-77341):',
+      '🔍 Введи код купону у форматі *XX-00000* або *1234*:',
       { parse_mode: 'Markdown' }
     );
     return;
@@ -787,24 +828,23 @@ bot.on('message:text', async (ctx) => {
   if (waitingForCode.has(userId) && (isAdmin || isOwner)) {
     waitingForCode.delete(userId);
 
-    // Validate code format (XX-00000)
-    const codeRegex = /^[A-Za-z]{2}-\d{5}$/;
-    if (!codeRegex.test(text)) {
+    const normalizedCode = normalizeVerificationCode(text);
+    if (!normalizedCode) {
       await ctx.reply(
-        '❌ Невірний формат коду.\n\nОчікується: *XX-00000* (наприклад, CO-77341)',
+        '❌ Невірний формат коду.\n\nОчікується: *XX-00000* або *1234*',
         { parse_mode: 'Markdown' }
       );
       return;
     }
 
-    const result = await verifyCode(userId, text);
+    const result = await verifyCode(userId, normalizedCode);
     const keyboard = isOwner ? getOwnerKeyboard() : getAdminKeyboard();
 
     if (result.success) {
       await ctx.reply(
         `✅ *Код підтверджено!*\n\n` +
           `Клієнт: ${result.user?.firstName || 'Невідомий'}\n` +
-          `Код: \`${text.toUpperCase()}\`\n\n` +
+          `Код: \`${normalizedCode}\`\n\n` +
           `💰 Списано 100 балів.\n` +
           `☕ *Видайте напій до 100 грн!*`,
         { parse_mode: 'Markdown', reply_markup: keyboard }
@@ -950,39 +990,60 @@ bot.on('callback_query:data', async (ctx) => {
     return;
   }
 
-  // Handle "Accept order" button
-  if (data.startsWith('order_accept:')) {
-    const orderId = data.replace('order_accept:', '');
-
-    try {
-      const response = await fetch(`${API_URL}/api/orders/${orderId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          adminTelegramId: String(userId),
-          status: 'PREPARING',
-        }),
-      });
-
-      if (response.ok) {
-        await ctx.answerCallbackQuery({ text: '✅ Замовлення прийнято!' });
-        const adminName = ctx.from?.first_name || `Admin ${userId}`;
-        await ctx.editMessageText(
-          ctx.callbackQuery.message?.text + `\n\n✅ *Прийнято в роботу* — ${adminName}`,
-          { parse_mode: 'Markdown' }
-        );
-      } else {
-        const err = (await response.json()) as { error?: string };
-        await ctx.answerCallbackQuery({ text: `❌ ${err.error || 'Помилка'}` });
-      }
-    } catch (error) {
-      console.error('[Order Accept] Error:', error);
-      await ctx.answerCallbackQuery({ text: '❌ Помилка з\'єднання' });
-    }
+  const isAccept = data.startsWith('order_accept:');
+  const isReject = data.startsWith('order_reject:');
+  if (!isAccept && !isReject) {
+    await ctx.answerCallbackQuery();
     return;
   }
 
-  await ctx.answerCallbackQuery();
+  const orderId = data.split(':')[1];
+  const nextStatus = isAccept ? 'PREPARING' : 'CANCELLED';
+
+  try {
+    const response = await fetch(`${API_URL}/api/orders/${orderId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        adminTelegramId: String(userId),
+        status: nextStatus,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = (await response.json()) as { error?: string };
+      await ctx.answerCallbackQuery({ text: `❌ ${err.error || 'Помилка'}` });
+      return;
+    }
+
+    const payload = (await response.json()) as { order?: { pickupMinutes?: number } };
+    const adminName = ctx.from?.first_name || `Admin ${userId}`;
+    const baseText = ctx.callbackQuery.message?.text || 'Замовлення';
+
+    if (isAccept) {
+      const pickupMinutes = payload.order?.pickupMinutes ?? 10;
+      await ctx.answerCallbackQuery({ text: '✅ Замовлення прийнято!' });
+      await ctx.editMessageText(
+        `${baseText}
+
+✅ *Прийнято в роботу баристою* ${adminName}
+⏱ Готовність ~${pickupMinutes} хв`,
+        { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [] } }
+      );
+      return;
+    }
+
+    await ctx.answerCallbackQuery({ text: '❌ Замовлення відхилено' });
+    await ctx.editMessageText(
+      `${baseText}
+
+❌ *Відхилено баристою* ${adminName}`,
+      { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [] } }
+    );
+  } catch (error) {
+    console.error('[Order Callback] Error:', error);
+    await ctx.answerCallbackQuery({ text: "❌ Помилка з'єднання" });
+  }
 });
 
 // Error handling
