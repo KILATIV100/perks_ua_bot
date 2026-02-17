@@ -1,56 +1,34 @@
-/**
- * Perkie Coffee Jump — Doodle-Jump clone on HTML5 Canvas
- *
- * Gameplay:
- *  - Перкі (coffee mascot) jumps automatically when landing on a platform
- *  - Control left/right via device accelerometer (devicemotion) or on-screen tap buttons
- *  - Platforms: Normal (white foam), Moving (drifting left-right), Spring (high jump)
- *  - Camera scrolls upward; game over when Перкі falls below the screen
- *  - Score = platforms cleared / height gained
- *
- * Security:
- *  - Score and timestamp are combined with a client-side salt and SHA-256'd
- *  - hash = SHA-256(`${score}${SALT}${timestamp}`)
- *  - Server re-computes the hash to reject tampered scores
- *  - The salt is also on the server as GAME_SCORE_SECRET_SALT env var
- */
-
 import { useEffect, useRef, useCallback, useState } from 'react';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 const CANVAS_W = 390;
 const CANVAS_H = 650;
 
-const GRAVITY = 0.35;
-const JUMP_VY = -13;           // Normal jump velocity (upward = negative)
-const SPRING_VY = -20;         // Spring platform boost
-const PLAYER_W = 44;
-const PLAYER_H = 44;
-const PLAYER_MOVE_SPEED = 5;   // px per frame horizontal speed
+const GRAVITY = 0.38;
+const JUMP_VY = -12.8;
+const PLAYER_W = 52;
+const PLAYER_H = 52;
+const PLAYER_MOVE_SPEED = 5.2;
 
-const PLATFORM_W = 72;
-const PLATFORM_H = 14;
-const PLATFORM_GAP_MIN = 70;   // min vertical gap between platforms
-const PLATFORM_GAP_MAX = 110;  // max vertical gap (increases with height/score)
-const MOVING_PLATFORM_SPEED = 1.5;
+// Hitbox is slightly inset from sprite bounds to match mascot body silhouette.
+const PLAYER_HITBOX = {
+  offsetX: 6,
+  offsetY: 5,
+  width: PLAYER_W - 12,
+  height: PLAYER_H - 10,
+};
 
-// Client-side salt — must match GAME_SCORE_SECRET_SALT on the server
 const CLIENT_SALT = import.meta.env.VITE_GAME_SALT ?? 'perkie-default-salt-change-me';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-type PlatformType = 'normal' | 'moving' | 'spring';
+type PlatformType = 'normal' | 'moving' | 'fragile';
 
 interface Platform {
   x: number;
   y: number;
+  width: number;
+  height: number;
   type: PlatformType;
-  dx: number; // velocity for moving platforms
+  dx: number;
+  broken: boolean;
 }
 
 interface Player {
@@ -63,8 +41,8 @@ interface Player {
 interface GameState {
   player: Player;
   platforms: Platform[];
-  score: number;
-  cameraY: number;   // top of the visible world (world-space Y)
+  cameraY: number;
+  maxHeight: number;
   gameOver: boolean;
   startTime: number;
 }
@@ -73,11 +51,27 @@ interface PerkieJumpProps {
   telegramId?: string;
   apiUrl?: string;
   onScoreSubmit?: (score: number, pointsAwarded: number) => void;
+  mascotSrc?: string;
 }
 
-// ---------------------------------------------------------------------------
-// SHA-256 via Web Crypto API (async)
-// ---------------------------------------------------------------------------
+interface LevelConfig {
+  level: number;
+  minScore: number;
+  maxScore: number;
+  platformWidth: number;
+  gapMin: number;
+  gapMax: number;
+  movingChance: number;
+  fragileChance: number;
+  movingSpeed: number;
+}
+
+const LEVELS: LevelConfig[] = [
+  { level: 1, minScore: 0, maxScore: 999, platformWidth: 110, gapMin: 72, gapMax: 102, movingChance: 0.0, fragileChance: 0.0, movingSpeed: 0 },
+  { level: 2, minScore: 1000, maxScore: 2499, platformWidth: 92, gapMin: 86, gapMax: 128, movingChance: 0.35, fragileChance: 0.0, movingSpeed: 1.5 },
+  { level: 3, minScore: 2500, maxScore: 4999, platformWidth: 78, gapMin: 98, gapMax: 146, movingChance: 0.4, fragileChance: 0.3, movingSpeed: 1.9 },
+  { level: 4, minScore: 5000, maxScore: Number.MAX_SAFE_INTEGER, platformWidth: 66, gapMin: 112, gapMax: 170, movingChance: 0.62, fragileChance: 0.25, movingSpeed: 2.6 },
+];
 
 async function sha256(message: string): Promise<string> {
   const data = new TextEncoder().encode(message);
@@ -87,247 +81,201 @@ async function sha256(message: string): Promise<string> {
     .join('');
 }
 
-// ---------------------------------------------------------------------------
-// Platform generation
-// ---------------------------------------------------------------------------
+function getLevelConfig(score: number): LevelConfig {
+  return LEVELS.find((l) => score >= l.minScore && score <= l.maxScore) ?? LEVELS[LEVELS.length - 1];
+}
 
-function makePlatform(y: number, score: number): Platform {
-  // Higher score → more moving/spring platforms
-  const rand = Math.random();
-  const movingChance = Math.min(0.1 + score * 0.0005, 0.4);
-  const springChance = Math.min(0.03 + score * 0.0001, 0.12);
+function createPlatform(y: number, score: number, difficultyMultiplier: number): Platform {
+  const cfg = getLevelConfig(score);
 
+  // Level progression algorithm:
+  // 1) Pick current level by score range.
+  // 2) Use level probabilities (movingChance/fragileChance).
+  // 3) Scale moving speed by difficultyMultiplier to make high-score runs faster.
+  const r = Math.random();
   let type: PlatformType = 'normal';
-  if (rand < springChance) type = 'spring';
-  else if (rand < springChance + movingChance) type = 'moving';
+  if (r < cfg.fragileChance) type = 'fragile';
+  else if (r < cfg.fragileChance + cfg.movingChance) type = 'moving';
+
+  const width = cfg.platformWidth;
+  const speed = cfg.movingSpeed * difficultyMultiplier;
 
   return {
-    x: Math.random() * (CANVAS_W - PLATFORM_W),
+    x: Math.random() * (CANVAS_W - width),
     y,
+    width,
+    height: 14,
     type,
-    dx: type === 'moving' ? MOVING_PLATFORM_SPEED * (Math.random() < 0.5 ? 1 : -1) : 0,
+    dx: type === 'moving' ? speed * (Math.random() > 0.5 ? 1 : -1) : 0,
+    broken: false,
   };
-}
-
-function generateInitialPlatforms(): Platform[] {
-  const platforms: Platform[] = [];
-  // First platform under the player (guaranteed landing)
-  platforms.push({ x: CANVAS_W / 2 - PLATFORM_W / 2, y: CANVAS_H - 80, type: 'normal', dx: 0 });
-
-  let y = CANVAS_H - 80 - PLATFORM_GAP_MIN;
-  while (y > -CANVAS_H) {
-    platforms.push(makePlatform(y, 0));
-    y -= PLATFORM_GAP_MIN + Math.random() * (PLATFORM_GAP_MAX - PLATFORM_GAP_MIN);
-  }
-  return platforms;
-}
-
-// ---------------------------------------------------------------------------
-// Drawing helpers
-// ---------------------------------------------------------------------------
-
-function drawPlatform(ctx: CanvasRenderingContext2D, p: Platform, camY: number): void {
-  const screenY = p.y - camY;
-
-  if (p.type === 'spring') {
-    // Green platform with spring indicator
-    ctx.fillStyle = '#4ade80';
-    ctx.shadowColor = '#16a34a';
-    ctx.shadowBlur = 6;
-    ctx.beginPath();
-    ctx.roundRect(p.x, screenY, PLATFORM_W, PLATFORM_H, 6);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    // Spring coil symbol
-    ctx.fillStyle = '#166534';
-    ctx.font = 'bold 10px sans-serif';
-    ctx.fillText('⚡', p.x + PLATFORM_W / 2 - 6, screenY + 11);
-  } else if (p.type === 'moving') {
-    // Blue moving platform
-    ctx.fillStyle = '#60a5fa';
-    ctx.shadowColor = '#2563eb';
-    ctx.shadowBlur = 4;
-    ctx.beginPath();
-    ctx.roundRect(p.x, screenY, PLATFORM_W, PLATFORM_H, 6);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-  } else {
-    // Normal: milk foam look (white/cream)
-    const grad = ctx.createLinearGradient(p.x, screenY, p.x, screenY + PLATFORM_H);
-    grad.addColorStop(0, '#fefce8');
-    grad.addColorStop(1, '#d4b896');
-    ctx.fillStyle = grad;
-    ctx.shadowColor = 'rgba(0,0,0,0.15)';
-    ctx.shadowBlur = 4;
-    ctx.beginPath();
-    ctx.roundRect(p.x, screenY, PLATFORM_W, PLATFORM_H, 6);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    // Foam bubble dots
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    for (let i = 0; i < 4; i++) {
-      ctx.beginPath();
-      ctx.arc(p.x + 10 + i * 16, screenY + 5, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-}
-
-function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, camY: number): void {
-  const sx = player.x;
-  const sy = player.y - camY;
-
-  ctx.save();
-  if (player.facing === 'left') {
-    ctx.translate(sx + PLAYER_W, sy);
-    ctx.scale(-1, 1);
-    ctx.translate(-sx, -sy);
-  }
-
-  // Body — coffee cup
-  ctx.fillStyle = '#92400e';
-  ctx.beginPath();
-  ctx.roundRect(sx + 8, sy + 16, PLAYER_W - 16, PLAYER_H - 16, 6);
-  ctx.fill();
-
-  // Cup sleeve
-  ctx.fillStyle = '#78350f';
-  ctx.fillRect(sx + 8, sy + 24, PLAYER_W - 16, 8);
-
-  // Handle
-  ctx.strokeStyle = '#92400e';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(sx + PLAYER_W - 4, sy + 28, 6, -Math.PI / 2, Math.PI / 2);
-  ctx.stroke();
-
-  // Foam top
-  ctx.fillStyle = '#fef3c7';
-  ctx.beginPath();
-  ctx.ellipse(sx + PLAYER_W / 2, sy + 16, (PLAYER_W - 16) / 2, 6, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Eyes
-  ctx.fillStyle = '#1c1917';
-  ctx.beginPath();
-  ctx.arc(sx + PLAYER_W / 2 - 5, sy + 8, 3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(sx + PLAYER_W / 2 + 5, sy + 8, 3, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Smile
-  ctx.strokeStyle = '#1c1917';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(sx + PLAYER_W / 2, sy + 11, 4, 0.2, Math.PI - 0.2);
-  ctx.stroke();
-
-  ctx.restore();
 }
 
 function drawBackground(ctx: CanvasRenderingContext2D): void {
   const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
-  grad.addColorStop(0, '#1e1b4b');
-  grad.addColorStop(0.5, '#312e81');
-  grad.addColorStop(1, '#1e1b4b');
+  grad.addColorStop(0, '#1b1726');
+  grad.addColorStop(1, '#0f0d18');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 }
 
-function drawScore(ctx: CanvasRenderingContext2D, score: number): void {
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.font = 'bold 22px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText(`☕ ${score}`, 16, 38);
+function drawPlatform(ctx: CanvasRenderingContext2D, p: Platform, camY: number): void {
+  const sy = p.y - camY;
+  if (p.broken) return;
+
+  if (p.type === 'fragile') {
+    ctx.fillStyle = '#5b3a29';
+    ctx.strokeStyle = '#3a2418';
+  } else if (p.type === 'moving') {
+    ctx.fillStyle = '#e8d3b4';
+    ctx.strokeStyle = '#b98c5e';
+  } else {
+    // Level 1 visual style: milk-foam clouds
+    ctx.fillStyle = '#f6eadc';
+    ctx.strokeStyle = '#e2c7a0';
+  }
+
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(p.x, sy, p.width, p.height, 8);
+  ctx.fill();
+  ctx.stroke();
+}
+
+function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, camY: number, mascot: HTMLImageElement | null): void {
+  const sx = player.x;
+  const sy = player.y - camY;
+
+  if (!mascot) {
+    ctx.fillStyle = '#d4a373';
+    ctx.fillRect(sx, sy, PLAYER_W, PLAYER_H);
+    return;
+  }
+
+  ctx.save();
+  if (player.facing === 'left') {
+    // Horizontal flip so Perkie faces movement direction.
+    ctx.translate(sx + PLAYER_W, sy);
+    ctx.scale(-1, 1);
+    ctx.drawImage(mascot, 0, 0, PLAYER_W, PLAYER_H);
+  } else {
+    ctx.drawImage(mascot, sx, sy, PLAYER_W, PLAYER_H);
+  }
+  ctx.restore();
 }
 
 function drawControls(ctx: CanvasRenderingContext2D): void {
-  // Left arrow button
-  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
   ctx.beginPath();
   ctx.roundRect(8, CANVAS_H - 80, 72, 64, 12);
   ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.font = 'bold 28px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('◀', 44, CANVAS_H - 38);
-
-  // Right arrow button
-  ctx.fillStyle = 'rgba(255,255,255,0.15)';
   ctx.beginPath();
   ctx.roundRect(CANVAS_W - 80, CANVAS_H - 80, 72, 64, 12);
   ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('◀', 44, CANVAS_H - 38);
   ctx.fillText('▶', CANVAS_W - 44, CANVAS_H - 38);
 }
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
-export function PerkieJump({ telegramId, apiUrl, onScoreSubmit }: PerkieJumpProps) {
+export function PerkieJump({ telegramId, apiUrl, onScoreSubmit, mascotSrc = '/perkie.png' }: PerkieJumpProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef<GameState | null>(null);
-  const animFrameRef = useRef<number>(0);
   const inputRef = useRef({ left: false, right: false, accelX: 0 });
+  const animFrameRef = useRef<number>(0);
+  const mascotRef = useRef<HTMLImageElement | null>(null);
+
   const [gamePhase, setGamePhase] = useState<'idle' | 'playing' | 'gameover'>('idle');
+  const [score, setScore] = useState(0);
+  const [level, setLevel] = useState(1);
+  const [isGameOver, setIsGameOver] = useState(false);
   const [finalScore, setFinalScore] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [pointsEarned, setPointsEarned] = useState(0);
 
-  // ── Initialize / restart game ───────────────────────────────────────────
+  const submitScore = useCallback(async (value: number, durationMs: number) => {
+    if (!telegramId || !apiUrl) return;
+    setSubmitting(true);
+    try {
+      const timestamp = Date.now();
+      const hash = await sha256(`${value}${CLIENT_SALT}${timestamp}`);
+      const res = await fetch(`${apiUrl}/api/games/submit-score`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegramId, score: value, timestamp, hash, gameDurationMs: durationMs }),
+      });
+      if (res.ok) {
+        const data = await res.json() as { pointsAwarded?: number };
+        const pts = data.pointsAwarded ?? 0;
+        setPointsEarned(pts);
+        setSubmitted(true);
+        onScoreSubmit?.(value, pts);
+      }
+    } catch {
+      // silent
+    } finally {
+      setSubmitting(false);
+    }
+  }, [telegramId, apiUrl, onScoreSubmit]);
+
+  const handleGameOver = useCallback((value: number) => {
+    const gs = stateRef.current;
+    if (!gs) return;
+    const durationMs = Date.now() - gs.startTime;
+    setFinalScore(value);
+    setIsGameOver(true);
+    setGamePhase('gameover');
+    submitScore(value, durationMs);
+  }, [submitScore]);
+
+  useEffect(() => {
+    // Safe image loading lifecycle:
+    // - create Image once in effect
+    // - assign onload/onerror handlers
+    // - store it in ref only after successful load
+    // - cleanup handlers on unmount to avoid stale updates
+    const img = new Image();
+    img.src = mascotSrc;
+    img.onload = () => { mascotRef.current = img; };
+    img.onerror = () => { mascotRef.current = null; };
+
+    return () => {
+      img.onload = null;
+      img.onerror = null;
+    };
+  }, [mascotSrc]);
+
   const startGame = useCallback(() => {
-    const platforms = generateInitialPlatforms();
+    const initialPlatforms: Platform[] = [];
+    const first: Platform = { x: CANVAS_W / 2 - 55, y: CANVAS_H - 90, width: 110, height: 14, type: 'normal', dx: 0, broken: false };
+    initialPlatforms.push(first);
+
+    let y = first.y - 85;
+    while (y > -CANVAS_H) {
+      initialPlatforms.push(createPlatform(y, 0, 1));
+      y -= 80 + Math.random() * 25;
+    }
+
     stateRef.current = {
-      player: {
-        x: CANVAS_W / 2 - PLAYER_W / 2,
-        y: CANVAS_H - 80 - PLAYER_H, // just above first platform
-        vy: JUMP_VY,
-        facing: 'right',
-      },
-      platforms,
-      score: 0,
+      player: { x: CANVAS_W / 2 - PLAYER_W / 2, y: first.y - PLAYER_H, vy: JUMP_VY, facing: 'right' },
+      platforms: initialPlatforms,
       cameraY: 0,
+      maxHeight: 0,
       gameOver: false,
       startTime: Date.now(),
     };
-    setGamePhase('playing');
+
+    setScore(0);
+    setLevel(1);
+    setIsGameOver(false);
     setSubmitted(false);
     setPointsEarned(0);
+    setGamePhase('playing');
   }, []);
 
-  // ── Score submission ────────────────────────────────────────────────────
-  const submitScore = useCallback(
-    async (score: number, durationMs: number) => {
-      if (!telegramId || !apiUrl) return;
-      setSubmitting(true);
-      try {
-        const timestamp = Date.now();
-        const hash = await sha256(`${score}${CLIENT_SALT}${timestamp}`);
-        const res = await fetch(`${apiUrl}/api/games/submit-score`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ telegramId, score, timestamp, hash, gameDurationMs: durationMs }),
-        });
-        if (res.ok) {
-          const data = await res.json() as { pointsAwarded?: number };
-          const pts = data.pointsAwarded ?? 0;
-          setPointsEarned(pts);
-          onScoreSubmit?.(score, pts);
-          setSubmitted(true);
-        }
-      } catch {
-        // silent — offline or server error
-      } finally {
-        setSubmitting(false);
-      }
-    },
-    [telegramId, apiUrl, onScoreSubmit],
-  );
-
-  // ── Main game loop ──────────────────────────────────────────────────────
   const gameLoop = useCallback(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
@@ -335,108 +283,92 @@ export function PerkieJump({ telegramId, apiUrl, onScoreSubmit }: PerkieJumpProp
     if (!canvas || !ctx || !gs || gs.gameOver) return;
 
     const inp = inputRef.current;
-
-    // ── Horizontal movement ──────────────────────────────────────────────
-    const accelInput = Math.abs(inp.accelX) > 2 ? inp.accelX / 9.8 : 0; // normalize ~1g
+    const accelInput = Math.abs(inp.accelX) > 2 ? inp.accelX / 9.8 : 0;
     let dx = 0;
     if (inp.left || accelInput < -0.15) { dx = -PLAYER_MOVE_SPEED; gs.player.facing = 'left'; }
     if (inp.right || accelInput > 0.15) { dx = PLAYER_MOVE_SPEED; gs.player.facing = 'right'; }
 
     gs.player.x += dx;
-    // Wrap horizontally
     if (gs.player.x + PLAYER_W < 0) gs.player.x = CANVAS_W;
     if (gs.player.x > CANVAS_W) gs.player.x = -PLAYER_W;
 
-    // ── Vertical physics ─────────────────────────────────────────────────
     gs.player.vy += GRAVITY;
     gs.player.y += gs.player.vy;
 
-    // ── Platform collision (only when falling down) ──────────────────────
+    const currentScore = Math.floor(gs.maxHeight * 2.2);
+    const difficultyMultiplier = Math.min(1 + currentScore / 4000, 2.2);
+
+    for (const p of gs.platforms) {
+      if (p.type === 'moving' && !p.broken) {
+        p.x += p.dx;
+        if (p.x <= 0 || p.x + p.width >= CANVAS_W) p.dx *= -1;
+      }
+    }
+
     if (gs.player.vy > 0) {
-      const pFeet = gs.player.y + PLAYER_H;
-      const pLeft = gs.player.x;
-      const pRight = gs.player.x + PLAYER_W;
+      const feetY = gs.player.y + PLAYER_HITBOX.offsetY + PLAYER_HITBOX.height;
+      const prevFeetY = feetY - gs.player.vy;
+      const left = gs.player.x + PLAYER_HITBOX.offsetX;
+      const right = left + PLAYER_HITBOX.width;
 
-      for (const plat of gs.platforms) {
-        const prevFeet = pFeet - gs.player.vy;
-        const platTop = plat.y;
-        const platRight = plat.x + PLATFORM_W;
+      for (const p of gs.platforms) {
+        if (p.broken) continue;
+        const top = p.y;
 
-        if (
-          prevFeet <= platTop &&
-          pFeet >= platTop &&
-          pRight > plat.x + 4 &&
-          pLeft < platRight - 4
-        ) {
-          gs.player.y = plat.y - PLAYER_H;
-          gs.player.vy = plat.type === 'spring' ? SPRING_VY : JUMP_VY;
+        if (prevFeetY <= top && feetY >= top && right > p.x + 4 && left < p.x + p.width - 4) {
+          gs.player.y = p.y - PLAYER_HITBOX.height - PLAYER_HITBOX.offsetY;
+          gs.player.vy = JUMP_VY;
+          if (p.type === 'fragile') p.broken = true;
           break;
         }
       }
     }
 
-    // ── Camera scroll ────────────────────────────────────────────────────
-    // Scroll up when player reaches upper 40% of screen
+    const targetPlayerScreenY = CANVAS_H * 0.62;
     const playerScreenY = gs.player.y - gs.cameraY;
-    if (playerScreenY < CANVAS_H * 0.4) {
-      const scrollAmount = CANVAS_H * 0.4 - playerScreenY;
-      gs.cameraY -= scrollAmount;
-      gs.score = Math.max(gs.score, Math.floor(-gs.cameraY / 100));
+    if (playerScreenY < targetPlayerScreenY) {
+      const desiredCameraY = gs.player.y - targetPlayerScreenY;
+      gs.cameraY += (desiredCameraY - gs.cameraY) * 0.18;
     }
 
-    // ── Update moving platforms ──────────────────────────────────────────
-    for (const plat of gs.platforms) {
-      if (plat.type === 'moving') {
-        plat.x += plat.dx;
-        if (plat.x <= 0 || plat.x + PLATFORM_W >= CANVAS_W) plat.dx *= -1;
-      }
+    gs.maxHeight = Math.max(gs.maxHeight, -gs.cameraY);
+    const newScore = Math.floor(gs.maxHeight * 2.2);
+    const newLevel = getLevelConfig(newScore).level;
+    if (newScore !== score) setScore(newScore);
+    if (newLevel !== level) setLevel(newLevel);
+
+    const minY = Math.min(...gs.platforms.map((p) => p.y));
+    const cfg = getLevelConfig(newScore);
+
+    if (minY > gs.cameraY - CANVAS_H) {
+      const gap = (cfg.gapMin + Math.random() * (cfg.gapMax - cfg.gapMin)) * (0.95 + difficultyMultiplier * 0.08);
+      gs.platforms.push(createPlatform(minY - gap, newScore, difficultyMultiplier));
     }
 
-    // ── Generate new platforms at top ────────────────────────────────────
-    const topPlatY = Math.min(...gs.platforms.map((p) => p.y));
-    if (topPlatY > gs.cameraY - CANVAS_H) {
-      const gapMultiplier = Math.min(1 + gs.score * 0.001, 1.5);
-      const gap = PLATFORM_GAP_MIN + Math.random() * (PLATFORM_GAP_MAX - PLATFORM_GAP_MIN) * gapMultiplier;
-      gs.platforms.push(makePlatform(topPlatY - gap, gs.score));
-    }
+    gs.platforms = gs.platforms.filter((p) => !p.broken && p.y < gs.cameraY + CANVAS_H + 220);
 
-    // ── Cull platforms that are way off the bottom ───────────────────────
-    gs.platforms = gs.platforms.filter((p) => p.y < gs.cameraY + CANVAS_H + 200);
-
-    // ── Game over: player fell below screen ──────────────────────────────
-    if (gs.player.y - gs.cameraY > CANVAS_H + 100) {
+    if (gs.player.y - gs.cameraY > CANVAS_H + 120) {
       gs.gameOver = true;
-      const duration = Date.now() - gs.startTime;
-      setFinalScore(gs.score);
-      setGamePhase('gameover');
-      submitScore(gs.score, duration);
+      handleGameOver(newScore);
       return;
     }
 
-    // ── Draw ─────────────────────────────────────────────────────────────
     drawBackground(ctx);
-    for (const plat of gs.platforms) {
-      const screenY = plat.y - gs.cameraY;
-      if (screenY > -PLATFORM_H && screenY < CANVAS_H + PLATFORM_H) {
-        drawPlatform(ctx, plat, gs.cameraY);
-      }
+    for (const p of gs.platforms) {
+      const sy = p.y - gs.cameraY;
+      if (sy > -30 && sy < CANVAS_H + 30) drawPlatform(ctx, p, gs.cameraY);
     }
-    drawPlayer(ctx, gs.player, gs.cameraY);
-    drawScore(ctx, gs.score);
+    drawPlayer(ctx, gs.player, gs.cameraY, mascotRef.current);
     drawControls(ctx);
 
     animFrameRef.current = requestAnimationFrame(gameLoop);
-  }, [submitScore]);
+  }, [score, level, handleGameOver]);
 
-  // ── Start/stop loop when phase changes ─────────────────────────────────
   useEffect(() => {
-    if (gamePhase === 'playing') {
-      animFrameRef.current = requestAnimationFrame(gameLoop);
-    }
+    if (gamePhase === 'playing') animFrameRef.current = requestAnimationFrame(gameLoop);
     return () => cancelAnimationFrame(animFrameRef.current);
   }, [gamePhase, gameLoop]);
 
-  // ── Input: keyboard (desktop) ───────────────────────────────────────────
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'ArrowLeft') inputRef.current.left = true;
@@ -454,34 +386,30 @@ export function PerkieJump({ telegramId, apiUrl, onScoreSubmit }: PerkieJumpProp
     };
   }, []);
 
-  // ── Input: device accelerometer ─────────────────────────────────────────
   useEffect(() => {
     const onMotion = (e: DeviceMotionEvent) => {
       const accel = e.accelerationIncludingGravity;
-      if (accel?.x !== null && accel?.x !== undefined) {
-        inputRef.current.accelX = accel.x;
-      }
+      if (accel?.x !== null && accel?.x !== undefined) inputRef.current.accelX = accel.x;
     };
     window.addEventListener('devicemotion', onMotion);
     return () => window.removeEventListener('devicemotion', onMotion);
   }, []);
 
-  // ── Input: touch buttons on canvas ─────────────────────────────────────
   const handleCanvasTouch = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
     const rect = canvas.getBoundingClientRect();
     const scaleX = CANVAS_W / rect.width;
+    const scaleY = CANVAS_H / rect.height;
 
     let leftPressed = false;
     let rightPressed = false;
 
     for (let i = 0; i < e.touches.length; i++) {
       const tx = (e.touches[i].clientX - rect.left) * scaleX;
-      const ty = (e.touches[i].clientY - rect.top) * (CANVAS_H / rect.height);
-      // Left button zone: x 8–80, y CANVAS_H-80 to CANVAS_H-16
+      const ty = (e.touches[i].clientY - rect.top) * scaleY;
       if (tx >= 8 && tx <= 80 && ty >= CANVAS_H - 80 && ty <= CANVAS_H - 16) leftPressed = true;
-      // Right button zone: x CANVAS_W-80 to CANVAS_W-8
       if (tx >= CANVAS_W - 80 && tx <= CANVAS_W - 8 && ty >= CANVAS_H - 80 && ty <= CANVAS_H - 16) rightPressed = true;
     }
 
@@ -494,7 +422,6 @@ export function PerkieJump({ telegramId, apiUrl, onScoreSubmit }: PerkieJumpProp
     inputRef.current.right = false;
   }, []);
 
-  // ── Idle screen drawing ─────────────────────────────────────────────────
   useEffect(() => {
     if (gamePhase !== 'idle') return;
     const canvas = canvasRef.current;
@@ -502,67 +429,61 @@ export function PerkieJump({ telegramId, apiUrl, onScoreSubmit }: PerkieJumpProp
     if (!canvas || !ctx) return;
 
     drawBackground(ctx);
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.font = 'bold 28px sans-serif';
+    ctx.fillStyle = '#d4a373';
+    ctx.font = 'bold 30px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Perkie Coffee Jump', CANVAS_W / 2, CANVAS_H / 2 - 60);
-    ctx.font = '18px sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.fillText('Стрибай по молочній пінці!', CANVAS_W / 2, CANVAS_H / 2 - 20);
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.font = '15px sans-serif';
-    ctx.fillText('Нахили телефон або тапай кнопки', CANVAS_W / 2, CANVAS_H / 2 + 20);
+    ctx.fillText('Perkie Jump', CANVAS_W / 2, CANVAS_H / 2 - 70);
+    ctx.fillStyle = 'rgba(255,255,255,0.72)';
+    ctx.font = '16px sans-serif';
+    ctx.fillText('Стрибай вище та відкривай нові рівні!', CANVAS_W / 2, CANVAS_H / 2 - 30);
   }, [gamePhase]);
-
-  // ── Game-over screen drawing ────────────────────────────────────────────
-  useEffect(() => {
-    if (gamePhase !== 'gameover') return;
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) return;
-
-    // Dark overlay
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#fbbf24';
-    ctx.font = 'bold 32px sans-serif';
-    ctx.fillText('Гра закінчена! ☕', CANVAS_W / 2, CANVAS_H / 2 - 70);
-
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.font = 'bold 24px sans-serif';
-    ctx.fillText(`Рахунок: ${finalScore}`, CANVAS_W / 2, CANVAS_H / 2 - 20);
-
-    if (submitting) {
-      ctx.fillStyle = 'rgba(255,255,255,0.5)';
-      ctx.font = '16px sans-serif';
-      ctx.fillText('Зберігаємо результат...', CANVAS_W / 2, CANVAS_H / 2 + 20);
-    } else if (submitted) {
-      ctx.fillStyle = '#4ade80';
-      ctx.font = 'bold 18px sans-serif';
-      ctx.fillText(`+${pointsEarned} балів! 🎉`, CANVAS_W / 2, CANVAS_H / 2 + 20);
-    }
-  }, [gamePhase, finalScore, submitting, submitted, pointsEarned]);
 
   return (
     <div className="flex flex-col items-center gap-4">
-      <canvas
-        ref={canvasRef}
-        width={CANVAS_W}
-        height={CANVAS_H}
-        className="rounded-2xl w-full max-w-[390px] touch-none"
-        style={{ imageRendering: 'pixelated', maxHeight: '70vh', objectFit: 'contain' }}
-        onTouchStart={handleCanvasTouch}
-        onTouchMove={handleCanvasTouch}
-        onTouchEnd={handleCanvasTouchEnd}
-        onTouchCancel={handleCanvasTouchEnd}
-      />
+      <div className="relative w-full max-w-[390px]">
+        <canvas
+          ref={canvasRef}
+          width={CANVAS_W}
+          height={CANVAS_H}
+          className="rounded-2xl w-full touch-none"
+          style={{ maxHeight: '70vh', objectFit: 'contain' }}
+          onTouchStart={handleCanvasTouch}
+          onTouchMove={handleCanvasTouch}
+          onTouchEnd={handleCanvasTouchEnd}
+          onTouchCancel={handleCanvasTouchEnd}
+        />
+
+        {gamePhase === 'playing' && (
+          <>
+            <div
+              className="absolute top-3 left-3 px-3 py-2 rounded-xl text-sm font-bold"
+              style={{ background: 'rgba(15, 13, 24, 0.78)', color: '#d4a373' }}
+            >
+              Score: {score}
+            </div>
+            <div
+              className="absolute top-3 right-3 px-3 py-2 rounded-xl text-sm font-bold"
+              style={{ background: 'rgba(15, 13, 24, 0.78)', color: '#d4a373' }}
+            >
+              Level {level}
+            </div>
+          </>
+        )}
+
+        {isGameOver && (
+          <div className="absolute inset-0 bg-black/60 rounded-2xl flex flex-col items-center justify-center text-center px-4">
+            <h3 className="text-2xl font-extrabold" style={{ color: '#d4a373' }}>Гра закінчена!</h3>
+            <p className="text-white mt-2">Рахунок: <b>{finalScore}</b></p>
+            {submitting && <p className="text-white/70 mt-2 text-sm">Зберігаємо результат...</p>}
+            {!submitting && submitted && <p className="text-green-300 mt-2 text-sm">+{pointsEarned} балів</p>}
+          </div>
+        )}
+      </div>
 
       {gamePhase === 'idle' && (
         <button
           className="px-8 py-3 rounded-2xl font-bold text-white text-lg"
-          style={{ background: 'linear-gradient(135deg, #92400e, #d97706)' }}
+          style={{ background: 'linear-gradient(135deg, #6f3b16, #d4a373)' }}
           onClick={startGame}
         >
           ☕ Почати гру
@@ -570,21 +491,13 @@ export function PerkieJump({ telegramId, apiUrl, onScoreSubmit }: PerkieJumpProp
       )}
 
       {gamePhase === 'gameover' && (
-        <div className="flex gap-3">
-          <button
-            className="px-6 py-3 rounded-2xl font-bold text-white"
-            style={{ background: 'linear-gradient(135deg, #92400e, #d97706)' }}
-            onClick={startGame}
-          >
-            ↺ Ще раз
-          </button>
-        </div>
-      )}
-
-      {gamePhase === 'playing' && (
-        <p className="text-xs opacity-50 text-center">
-          Нахили телефон або тапай ◀ ▶
-        </p>
+        <button
+          className="px-6 py-3 rounded-2xl font-bold text-white"
+          style={{ background: 'linear-gradient(135deg, #6f3b16, #d4a373)' }}
+          onClick={startGame}
+        >
+          ↺ Ще раз
+        </button>
       )}
     </div>
   );
