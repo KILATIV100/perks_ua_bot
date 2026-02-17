@@ -73,6 +73,12 @@ function App() {
   const [isGameFullscreen, setIsGameFullscreen] = useState(false);
   const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [redeemState, setRedeemState] = useState<{
+    loading: boolean;
+    code: string | null;
+    expiresAt: string | null;
+    error: string | null;
+  }>({ loading: false, code: null, expiresAt: null, error: null });
 
   const theme = useMemo(() => {
     const params = WebApp.themeParams;
@@ -236,6 +242,34 @@ function App() {
     }).catch(() => {});
   }, [referralLink]);
 
+  const handleRedeem = useCallback(async () => {
+    if (!telegramUser) return;
+    setRedeemState(prev => ({ ...prev, loading: true, error: null }));
+    try {
+      const { data } = await api.post('/api/loyalty/redeem', {
+        telegramId: String(telegramUser.id),
+      });
+      if (data.ok) {
+        setRedeemState({ loading: false, code: data.code, expiresAt: data.expiresAt, error: null });
+        setAppUser((prev: any) => prev ? { ...prev, points: data.newBalance } : prev);
+      } else {
+        // ACTIVE_CODE_EXISTS returns the existing code
+        if (data.error === 'ACTIVE_CODE_EXISTS' && data.code) {
+          setRedeemState({ loading: false, code: data.code, expiresAt: data.expiresAt, error: null });
+        } else {
+          setRedeemState({ loading: false, code: null, expiresAt: null, error: data.message || 'Помилка' });
+        }
+      }
+    } catch (err: any) {
+      const resp = err?.response?.data;
+      if (resp?.error === 'ACTIVE_CODE_EXISTS' && resp.code) {
+        setRedeemState({ loading: false, code: resp.code, expiresAt: resp.expiresAt, error: null });
+      } else {
+        setRedeemState({ loading: false, code: null, expiresAt: null, error: resp?.message || 'Не вдалося створити код' });
+      }
+    }
+  }, [telegramUser]);
+
   if (loading) return <div className="p-20 text-center">Завантаження...</div>;
 
   return (
@@ -359,7 +393,7 @@ function App() {
                     Закрити
                   </button>
                 </div>
-                <div className="flex-1 overflow-auto p-4">
+                <div className="flex-1 overflow-hidden p-4" style={{ overscrollBehavior: 'none' }}>
                   {funZoneGame === 'tic_tac_toe' && (
                     telegramUser ? (
                       <TicTacToe
@@ -390,6 +424,53 @@ function App() {
         {activeTab === 'bonuses' && (
           <div className="space-y-6">
             <WheelOfFortune onSpin={handleSpin} canSpin={canSpin} nextSpinAt={nextSpinAt} theme={theme} />
+
+            {/* Redeem points section */}
+            <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+              <h3 className="font-semibold mb-2">🎁 Обмін балів</h3>
+              <p className="text-sm mb-3" style={{ color: theme.hintColor }}>
+                100 балів = безкоштовний напій. Код дійсний 15 хвилин.
+              </p>
+
+              {redeemState.code && redeemState.expiresAt ? (
+                <div className="text-center space-y-3">
+                  <div className="py-4 px-6 rounded-xl" style={{ backgroundColor: '#FFF8E1' }}>
+                    <p className="text-xs mb-1" style={{ color: '#92400e' }}>Твій код:</p>
+                    <p className="text-4xl font-bold tracking-widest" style={{ color: '#8B5A2B' }}>
+                      {redeemState.code}
+                    </p>
+                    <p className="text-xs mt-2" style={{ color: '#92400e' }}>
+                      Дійсний до {new Date(redeemState.expiresAt).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                  <p className="text-xs" style={{ color: theme.hintColor }}>Покажи цей код баристі</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between mb-3 p-3 rounded-xl" style={{ backgroundColor: theme.secondaryBgColor }}>
+                    <span className="text-sm" style={{ color: theme.hintColor }}>Твій баланс:</span>
+                    <span className="font-bold text-[#FFB300]">{appUser?.points || 0} балів</span>
+                  </div>
+                  {redeemState.error && (
+                    <div className="mb-3 p-3 rounded-xl text-center" style={{ backgroundColor: '#FEE2E2' }}>
+                      <p className="text-sm text-red-700">{redeemState.error}</p>
+                    </div>
+                  )}
+                  <button
+                    onClick={handleRedeem}
+                    disabled={redeemState.loading || (appUser?.points || 0) < 100}
+                    className="w-full py-3 rounded-xl font-bold text-sm transition-all active:scale-[0.98] disabled:opacity-50"
+                    style={{
+                      backgroundColor: (appUser?.points || 0) >= 100 ? '#FFB300' : theme.hintColor,
+                      color: (appUser?.points || 0) >= 100 ? '#fff' : theme.buttonTextColor,
+                    }}
+                  >
+                    {redeemState.loading ? 'Створюємо код...' : (appUser?.points || 0) >= 100 ? '🎟 Обміняти 100 балів' : `Потрібно ще ${100 - (appUser?.points || 0)} балів`}
+                  </button>
+                </>
+              )}
+            </div>
+
             <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
               <h3 className="font-semibold mb-2">🤝 Рефералка</h3>
               <p className="text-sm mb-3" style={{ color: theme.hintColor }}>

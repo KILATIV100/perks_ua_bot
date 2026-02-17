@@ -169,6 +169,12 @@ export function PerkyJump({ apiUrl, telegramId, onPointsEarned }: PerkyJumpProps
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('devicemotion', onDeviceMotion);
 
+    // Prevent touch events on canvas from bubbling (stops Telegram close/scroll gestures)
+    const preventTouch = (e: TouchEvent) => { e.preventDefault(); };
+    canvas.addEventListener('touchstart', preventTouch, { passive: false });
+    canvas.addEventListener('touchmove', preventTouch, { passive: false });
+    canvas.addEventListener('touchend', preventTouch, { passive: false });
+
     const draw = () => {
       const g = gameRef.current;
       ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
@@ -378,6 +384,9 @@ export function PerkyJump({ apiUrl, telegramId, onPointsEarned }: PerkyJumpProps
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('devicemotion', onDeviceMotion);
+      canvas.removeEventListener('touchstart', preventTouch);
+      canvas.removeEventListener('touchmove', preventTouch);
+      canvas.removeEventListener('touchend', preventTouch);
     };
   }, [gameState, makePlatform, submitScore, highScore]);
 
@@ -392,7 +401,7 @@ export function PerkyJump({ apiUrl, telegramId, onPointsEarned }: PerkyJumpProps
   }, []);
 
   return (
-    <div className="flex flex-col items-center gap-4 w-full">
+    <div className="flex flex-col items-center gap-4 w-full" style={{ touchAction: 'none', overscrollBehavior: 'none' }}>
       {/* Canvas */}
       <canvas
         ref={canvasRef}

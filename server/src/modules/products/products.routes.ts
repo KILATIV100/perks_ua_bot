@@ -15,19 +15,22 @@ export async function productRoutes(
       const products = await app.prisma.product.findMany({
         where: { isActive: true },
         orderBy: [{ category: 'asc' }, { name: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          volume: true,
+          price: true,
+          category: true,
+          type: true,
+          imageUrl: true,
+        },
       });
 
-      // Group by category
-      const grouped = products.reduce<Record<string, typeof products>>(
-        (acc, product) => {
-          if (!acc[product.category]) acc[product.category] = [];
-          acc[product.category].push(product);
-          return acc;
-        },
-        {},
-      );
-
-      return reply.send({ products: grouped });
+      // Return flat array with price as string (frontend expects Product[])
+      return reply.send({
+        products: products.map(p => ({ ...p, price: p.price.toString() })),
+      });
     } catch (error) {
       app.log.error({ err: error }, 'Get products error');
       return reply.status(500).send({ error: 'Failed to get products' });
