@@ -74,15 +74,31 @@ async function editTelegramMessage(
 const CreateOrderSchema = z.object({
   telegramId: z.union([z.number(), z.string()]).transform(String),
   locationId: z.string().uuid(),
-  paymentMethod: z.enum(['CASH', 'CARD']).default('CASH'),
-  pickupTime: z.number().int().min(5).max(60).optional(),
+  paymentMethod: z.enum(['cash', 'telegram_pay', 'CASH', 'CARD']).default('cash'),
+  deliveryType: z.enum(['pickup', 'shipping']).default('pickup'),
+  pickupMinutes: z.number().int().min(5).max(30).optional(),
+  pickupTime: z.number().int().min(5).max(30).optional(),
+  shippingAddr: z.string().min(5).optional(),
+  phone: z.string().min(6).optional(),
   items: z.array(
     z.object({
       productId: z.string().uuid(),
+      name: z.string().min(1).optional(),
       quantity: z.number().int().positive(),
       price: z.number().positive(),
     })
   ).min(1),
+}).superRefine((data, ctx) => {
+  if (data.deliveryType === 'shipping') {
+    if (!data.shippingAddr) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['shippingAddr'], message: 'Shipping address is required' });
+    }
+    if (!data.phone) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['phone'], message: 'Phone is required' });
+    }
+  } else if (!data.pickupMinutes && !data.pickupTime) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pickupMinutes'], message: 'Pickup time is required' });
+  }
 });
 
 const UpdateStatusSchema = z.object({
@@ -121,8 +137,9 @@ export async function orderRoutes(
       });
     }
 
-    const { telegramId, locationId, items, paymentMethod, pickupMinutes, deliveryType, shippingAddr, phone } = parseResult.data;
-    const resolvedPickupMinutes = deliveryType === 'shipping' ? 10 : (pickupMinutes ?? 10);
+    const { telegramId, locationId, items, paymentMethod, pickupMinutes, pickupTime, deliveryType, shippingAddr, phone } = parseResult.data;
+    const resolvedDeliveryType = deliveryType ?? 'pickup';
+    const resolvedPickupMinutes = resolvedDeliveryType === 'shipping' ? 10 : (pickupMinutes ?? pickupTime ?? 10);
 
     const user = await app.prisma.user.findUnique({ where: { telegramId } });
     if (!user) {
@@ -151,10 +168,14 @@ export async function orderRoutes(
         status: 'PENDING',
         totalPrice,
         paymentMethod,
-        pickupTime: resolvedPickupTime,
+        pickupMinutes: resolvedPickupMinutes,
+        deliveryType: resolvedDeliveryType,
+        shippingAddr: resolvedDeliveryType === 'shipping' ? shippingAddr : null,
+        phone: resolvedDeliveryType === 'shipping' ? phone : null,
         items: {
           create: items.map((item) => ({
             productId: item.productId,
+            name: item.name ?? 'Товар',
             quantity: item.quantity,
             price: item.price,
             total: item.price * item.quantity,
@@ -167,11 +188,13 @@ export async function orderRoutes(
       },
     });
 
-    const itemsList = items.map(i => `  • ${i.name} x${i.quantity} — ${i.price * i.quantity} грн`).join('\n');
+    const itemsList = items.map(i => `  • ${i.name ?? 'Товар'} x${i.quantity} — ${i.price * i.quantity} грн`).join('\n');
     const paymentLabel = ['cash', 'CASH'].includes(String(paymentMethod)) ? 'При отриманні' : 'Картка';
     const userName = user.firstName || user.username || `ID: ${telegramId}`;
 
-    const pickupInfo = `⏱ Час готовності: ${resolvedPickupTime} хв\n\n`;
+    const deliveryInfo = resolvedDeliveryType === 'shipping'
+      ? `🚚 Доставка: ${shippingAddr}\n📞 Телефон: ${phone}\n\n`
+      : `⏱ Час готовності: ${resolvedPickupMinutes} хв\n\n`;
 
     const adminMessage =
       `🆕 *Нове замовлення #${order.id.slice(0, 8)}*\n\n` +
@@ -241,7 +264,10 @@ export async function orderRoutes(
         location: order.location.name,
         items: order.items,
         paymentMethod,
-        pickupTime: resolvedPickupTime,
+        pickupMinutes: resolvedPickupMinutes,
+        deliveryType: resolvedDeliveryType,
+        shippingAddr: resolvedDeliveryType === 'shipping' ? shippingAddr : null,
+        phone: resolvedDeliveryType === 'shipping' ? phone : null,
         createdAt: order.createdAt,
       },
     });
