@@ -1,7 +1,6 @@
 [build]
 builder = "nixpacks"
-# Only compile here — postgres.railway.internal is NOT reachable during Docker build.
-buildCommand = "npm install && npm run build"
+buildCommand = "npm ci && npm run build"
 
 [deploy]
 startCommand = "npm run start"
