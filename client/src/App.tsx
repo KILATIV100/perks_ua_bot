@@ -5,6 +5,7 @@ import { WheelOfFortune } from './components/WheelOfFortune';
 import { Menu, CartItem } from './components/Menu';
 import { Radio } from './components/Radio';
 import { TicTacToe } from './components/TicTacToe';
+import { PerkyJump } from './components/PerkyJump';
 import { Checkout } from './components/Checkout';
 
 type TabType = 'locations' | 'menu' | 'shop' | 'games' | 'bonuses';
@@ -21,7 +22,41 @@ const API_URL = resolveApiUrl();
 const BOT_USERNAME = 'perkup_ua_bot';
 const KYIV_TIME_ZONE = 'Europe/Kyiv';
 
+// ── Token management ──────────────────────────────────────────────────────
+let accessToken: string | null = null;
+let refreshToken: string | null = null;
+
 const api = axios.create({ baseURL: API_URL });
+
+// Attach Authorization header when token is available
+api.interceptors.request.use((config) => {
+  if (accessToken) {
+    config.headers.Authorization = `Bearer ${accessToken}`;
+  }
+  return config;
+});
+
+// Auto-refresh on 401
+api.interceptors.response.use(
+  (res) => res,
+  async (error) => {
+    const original = error.config;
+    if (error.response?.status === 401 && refreshToken && !original._retry) {
+      original._retry = true;
+      try {
+        const { data } = await axios.post(`${API_URL}/api/auth/refresh`, { refreshToken });
+        accessToken = data.accessToken;
+        refreshToken = data.refreshToken;
+        original.headers.Authorization = `Bearer ${accessToken}`;
+        return api(original);
+      } catch {
+        accessToken = null;
+        refreshToken = null;
+      }
+    }
+    return Promise.reject(error);
+  },
+);
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('locations');
@@ -33,9 +68,17 @@ function App() {
   const [nextSpinAt, setNextSpinAt] = useState<string | null>(null);
   const [showTerms, setShowTerms] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [gameMode, setGameMode] = useState<'online' | 'offline'>('online');
+  const [gameMode] = useState<'online' | 'offline'>('offline');
+  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe' | 'perky_jump'>('tic_tac_toe');
+  const [isGameFullscreen, setIsGameFullscreen] = useState(false);
   const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [redeemState, setRedeemState] = useState<{
+    loading: boolean;
+    code: string | null;
+    expiresAt: string | null;
+    error: string | null;
+  }>({ loading: false, code: null, expiresAt: null, error: null });
 
   const theme = useMemo(() => {
     const params = WebApp.themeParams;
@@ -71,12 +114,6 @@ function App() {
     }
     return null;
   }, [startParam]);
-  const gameIdFromUrl = useMemo(() => {
-    if (startParam?.startsWith('game_')) {
-      return startParam.replace('game_', '');
-    }
-    return null;
-  }, [startParam]);
 
   useEffect(() => {
     WebApp.ready();
@@ -91,6 +128,25 @@ function App() {
   const syncUser = async () => {
     if (!telegramUser) return;
     try {
+      // Try JWT auth via Telegram initData first
+      const initData = WebApp.initData;
+      if (initData) {
+        try {
+          const { data } = await axios.post(`${API_URL}/api/auth/telegram`, {
+            initData,
+            startParam: startParam || undefined,
+          });
+          accessToken = data.accessToken;
+          refreshToken = data.refreshToken;
+          setAppUser(data.user);
+          checkSpinAvailability(data.user.lastSpinDate);
+          return;
+        } catch (authErr) {
+          console.warn('JWT auth failed, falling back to legacy sync:', authErr);
+        }
+      }
+
+      // Fallback: legacy sync for dev/testing (no Telegram context)
       const { data } = await api.post('/api/user/sync', {
         telegramId: String(telegramUser.id),
         username: telegramUser.username,
@@ -155,7 +211,7 @@ function App() {
     try {
       const urlParams = new URLSearchParams(window.location.search);
       const devMode = urlParams.get('dev') === 'true' || urlParams.get('admin') === 'true';
-      const { data } = await api.post('/api/user/spin', {
+      const { data } = await api.post('/api/loyalty/spin', {
         telegramId: String(telegramUser.id),
         userLat: lat,
         userLng: lng,
@@ -164,9 +220,9 @@ function App() {
 
       setAppUser((prev: any) => ({ ...prev, points: data.newBalance, totalSpins: (prev?.totalSpins || 0) + 1 }));
       setCanSpin(false);
-      setNextSpinAt(data.nextSpinAt || null);
+      setNextSpinAt(data.nextSpinAvailable || null);
 
-      return { reward: data.reward, newBalance: data.newBalance };
+      return { reward: data.prize?.value ?? 0, newBalance: data.newBalance };
     } catch (err: any) {
       const message = err?.response?.data?.message || 'Не вдалося крутнути колесо';
       return { error: err?.response?.data?.error || 'SpinError', message };
@@ -185,6 +241,34 @@ function App() {
       setTimeout(() => setReferralCopied(false), 2000);
     }).catch(() => {});
   }, [referralLink]);
+
+  const handleRedeem = useCallback(async () => {
+    if (!telegramUser) return;
+    setRedeemState(prev => ({ ...prev, loading: true, error: null }));
+    try {
+      const { data } = await api.post('/api/loyalty/redeem', {
+        telegramId: String(telegramUser.id),
+      });
+      if (data.ok) {
+        setRedeemState({ loading: false, code: data.code, expiresAt: data.expiresAt, error: null });
+        setAppUser((prev: any) => prev ? { ...prev, points: data.newBalance } : prev);
+      } else {
+        // ACTIVE_CODE_EXISTS returns the existing code
+        if (data.error === 'ACTIVE_CODE_EXISTS' && data.code) {
+          setRedeemState({ loading: false, code: data.code, expiresAt: data.expiresAt, error: null });
+        } else {
+          setRedeemState({ loading: false, code: null, expiresAt: null, error: data.message || 'Помилка' });
+        }
+      }
+    } catch (err: any) {
+      const resp = err?.response?.data;
+      if (resp?.error === 'ACTIVE_CODE_EXISTS' && resp.code) {
+        setRedeemState({ loading: false, code: resp.code, expiresAt: resp.expiresAt, error: null });
+      } else {
+        setRedeemState({ loading: false, code: null, expiresAt: null, error: resp?.message || 'Не вдалося створити код' });
+      }
+    }
+  }, [telegramUser]);
 
   if (loading) return <div className="p-20 text-center">Завантаження...</div>;
 
@@ -224,7 +308,7 @@ function App() {
               cart={cart}
               onCartChange={setCart}
               theme={theme}
-              canPreorder={activeTab === 'menu' ? selectedLocation?.canPreorder : true}
+              canPreorder={activeTab === 'menu' ? selectedLocation?.hasOrdering : true}
               locationName={selectedLocation?.name}
               mode={activeTab === 'menu' ? 'menu' : 'shop'}
             />
@@ -267,53 +351,126 @@ function App() {
             <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
               <h2 className="text-xl font-bold mb-2">🎮 Fun Zone</h2>
               <p className="text-sm" style={{ color: theme.hintColor }}>
-                Грай онлайн з друзями або офлайн удвох на одному екрані.
+                Обирай гру або вмикай PerkUp Radio.
               </p>
-              <div className="flex gap-2 mt-4">
+              <div className="grid grid-cols-2 gap-2 mt-4">
                 {[
-                  { id: 'online', label: 'Онлайн' },
-                  { id: 'offline', label: 'Офлайн' },
-                ].map(mode => (
+                  { id: 'tic_tac_toe', label: 'Хрестики-нулики', icon: '❌⭕' },
+                  { id: 'perky_jump', label: 'Perky Jump', icon: '🪂' },
+                ].map((item) => (
                   <button
-                    key={mode.id}
-                    onClick={() => setGameMode(mode.id as 'online' | 'offline')}
-                    className="flex-1 py-2 rounded-xl text-sm font-medium"
+                    key={item.id}
+                    onClick={() => {
+                      setFunZoneGame(item.id as typeof funZoneGame);
+                      setIsGameFullscreen(true);
+                    }}
+                    className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
                     style={{
-                      backgroundColor: gameMode === mode.id ? theme.buttonColor : theme.secondaryBgColor,
-                      color: gameMode === mode.id ? theme.buttonTextColor : theme.textColor,
+                      backgroundColor: funZoneGame === item.id ? theme.buttonColor : theme.secondaryBgColor,
+                      color: funZoneGame === item.id ? theme.buttonTextColor : theme.textColor,
                     }}
                   >
-                    {mode.label}
+                    <span>{item.icon}</span>
+                    <span className="truncate">{item.label}</span>
                   </button>
                 ))}
               </div>
             </div>
 
-            {telegramUser ? (
-              <TicTacToe
-                apiUrl={API_URL}
-                telegramId={telegramUser.id}
-                firstName={telegramUser.firstName}
-                botUsername={BOT_USERNAME}
-                gameIdFromUrl={gameIdFromUrl}
-                theme={theme}
-                mode={gameMode}
-              />
-            ) : (
-              <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
-                <p className="text-sm" style={{ color: theme.hintColor }}>
-                  Потрібен Telegram акаунт, щоб запускати онлайн-ігри.
-                </p>
+            <Radio theme={theme} />
+
+            {isGameFullscreen && (
+              <div className="fixed inset-0 z-50 flex flex-col" style={{ backgroundColor: theme.bgColor }}>
+                <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: `${theme.hintColor}30` }}>
+                  <h3 className="font-semibold" style={{ color: theme.textColor }}>
+                    {funZoneGame === 'tic_tac_toe' ? 'Хрестики-нулики' : 'Perky Jump'}
+                  </h3>
+                  <button
+                    onClick={() => setIsGameFullscreen(false)}
+                    className="px-3 py-1 rounded-lg text-sm font-medium"
+                    style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
+                  >
+                    Закрити
+                  </button>
+                </div>
+                <div className="flex-1 overflow-hidden p-4" style={{ overscrollBehavior: 'none' }}>
+                  {funZoneGame === 'tic_tac_toe' && (
+                    telegramUser ? (
+                      <TicTacToe
+                        theme={theme}
+                        mode={gameMode}
+                      />
+                    ) : (
+                      <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
+                        <p className="text-sm" style={{ color: theme.hintColor }}>
+                          Потрібен Telegram акаунт, щоб запускати онлайн-ігри.
+                        </p>
+                      </div>
+                    )
+                  )}
+                  {funZoneGame === 'perky_jump' && (
+                    <PerkyJump
+                      apiUrl={API_URL}
+                      telegramId={telegramUser ? String(telegramUser.id) : undefined}
+                      onPointsEarned={(pts) => setAppUser((prev: any) => prev ? { ...prev, points: (prev.points || 0) + pts } : prev)}
+                    />
+                  )}
+                </div>
               </div>
             )}
-
-            <Radio theme={theme} />
           </div>
         )}
 
         {activeTab === 'bonuses' && (
           <div className="space-y-6">
             <WheelOfFortune onSpin={handleSpin} canSpin={canSpin} nextSpinAt={nextSpinAt} theme={theme} />
+
+            {/* Redeem points section */}
+            <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
+              <h3 className="font-semibold mb-2">🎁 Обмін балів</h3>
+              <p className="text-sm mb-3" style={{ color: theme.hintColor }}>
+                100 балів = безкоштовний напій. Код дійсний 15 хвилин.
+              </p>
+
+              {redeemState.code && redeemState.expiresAt ? (
+                <div className="text-center space-y-3">
+                  <div className="py-4 px-6 rounded-xl" style={{ backgroundColor: '#FFF8E1' }}>
+                    <p className="text-xs mb-1" style={{ color: '#92400e' }}>Твій код:</p>
+                    <p className="text-4xl font-bold tracking-widest" style={{ color: '#8B5A2B' }}>
+                      {redeemState.code}
+                    </p>
+                    <p className="text-xs mt-2" style={{ color: '#92400e' }}>
+                      Дійсний до {new Date(redeemState.expiresAt).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                  <p className="text-xs" style={{ color: theme.hintColor }}>Покажи цей код баристі</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between mb-3 p-3 rounded-xl" style={{ backgroundColor: theme.secondaryBgColor }}>
+                    <span className="text-sm" style={{ color: theme.hintColor }}>Твій баланс:</span>
+                    <span className="font-bold text-[#FFB300]">{appUser?.points || 0} балів</span>
+                  </div>
+                  {redeemState.error && (
+                    <div className="mb-3 p-3 rounded-xl text-center" style={{ backgroundColor: '#FEE2E2' }}>
+                      <p className="text-sm text-red-700">{redeemState.error}</p>
+                    </div>
+                  )}
+                  <button
+                    onClick={handleRedeem}
+                    disabled={redeemState.loading || (appUser?.points || 0) < 100}
+                    className="w-full py-3 rounded-xl font-bold text-sm transition-all active:scale-[0.98] disabled:opacity-50"
+                    style={{
+                      backgroundColor: (appUser?.points || 0) >= 100 ? '#FFB300' : theme.hintColor,
+                      color: (appUser?.points || 0) >= 100 ? '#fff' : theme.buttonTextColor,
+                    }}
+                  >
+                    {redeemState.loading ? 'Створюємо код...' : (appUser?.points || 0) >= 100 ? '🎟 Обміняти 100 балів' : `Потрібно ще ${100 - (appUser?.points || 0)} балів`}
+                  </button>
+                </>
+              )}
+            </div>
+
             <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
               <h3 className="font-semibold mb-2">🤝 Рефералка</h3>
               <p className="text-sm mb-3" style={{ color: theme.hintColor }}>
@@ -358,7 +515,7 @@ function App() {
           { id: 'locations', icon: '📍', label: 'Точки' },
           { id: 'menu', icon: '☕', label: 'Меню' },
           { id: 'shop', icon: '🛒', label: 'Shop' },
-          { id: 'games', icon: '🎮', label: 'Ігри' },
+          { id: 'games', icon: '🎮', label: 'Fun Zone' },
           { id: 'bonuses', icon: '🎁', label: 'Бонуси' }
         ].map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id as TabType)} className="flex flex-col items-center p-1">

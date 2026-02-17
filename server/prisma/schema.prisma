@@ -7,12 +7,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum LocationStatus {
-  active
-  coming_soon
-}
+// ── Enums ────────────────────────────────────────────────────────────────────
 
-enum UserRole {
+enum Role {
   USER
   ADMIN
   OWNER
@@ -24,52 +21,105 @@ enum ProductType {
   BEANS
 }
 
+enum OrderStatus {
+  DRAFT
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY
+  COMPLETED
+  REJECTED
+  EXPIRED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+}
+
+enum GameType {
+  TIC_TAC_TOE
+  PERKY_JUMP
+}
+
+enum GameStatus {
+  WAITING
+  PLAYING
+  FINISHED
+  ABANDONED
+}
+
+// ── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id                String    @id @default(cuid())
+  telegramId        String    @unique
+  firstName         String?
+  lastName          String?
+  username          String?
+  languageCode      String?   @default("uk")
+
+  role              Role      @default(USER)
+  points            Int       @default(0)
+  totalSpins        Int       @default(0)
+  /// Date string in Kyiv timezone (YYYY-MM-DD). Resets spin at 00:00 Kyiv.
+  lastSpinDate      String?
+
+  // Referrals
+  referralCode      String    @unique @default(cuid())
+  referredById      String?
+  referredBy        User?     @relation("Referrals", fields: [referredById], references: [id])
+  referrals         User[]    @relation("Referrals")
+  referralBonusPaid Boolean   @default(false)
+
+  lastActiveAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations
+  orders            Order[]          @relation("UserOrders")
+  processedOrders   Order[]          @relation("ProcessedOrders")
+  redemptionCodes   RedemptionCode[] @relation("UserRedemptions")
+  confirmedCodes    RedemptionCode[] @relation("AdminConfirmations")
+  spinHistory       SpinHistory[]
+  gameScores        GameScore[]
+  dailyGameLimits   DailyGameLimit[]
+  sessionsAsPlayer1 GameSession[]    @relation("Player1")
+  sessionsAsPlayer2 GameSession[]    @relation("Player2")
+  wonSessions       GameSession[]    @relation("Winner")
+  radioLikes        RadioLike[]
+
+  @@index([telegramId])
+  @@map("users")
+}
+
 model Location {
-  id          String         @id @default(uuid())
+  id          String   @id @default(cuid())
+  slug        String   @unique
   name        String
-  lat         Float?
-  long        Float?
   address     String?
-  status      LocationStatus @default(active)
-  canPreorder Boolean        @default(true)
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  latitude    Float?
+  longitude   Float?
+  hasOrdering Boolean  @default(false)
+  isViewOnly  Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
   orders      Order[]
 
   @@map("locations")
 }
 
-model User {
-  id               String   @id @default(uuid())
-  telegramId       String   @unique
-  username         String?
-  firstName        String?
-  lastName         String?
-  points           Int      @default(0)
-  totalSpins       Int      @default(0)
-  lastSpin         DateTime?
-  lastSpinDate     String?  // Для скидання о 00:00 (YYYY-MM-DD)
-  role             UserRole @default(USER)
-  referredById     String?
-  redemptionCodes  RedemptionCode[]
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  orders           Order[]
-  sessionsAsPlayer1 GameSession[] @relation("Player1")
-  sessionsAsPlayer2 GameSession[] @relation("Player2")
-
-  @@map("users")
-}
-
 model Product {
-  id          String      @id @default(uuid())
+  id          String      @id @default(cuid())
   name        String
   description String?
   volume      String?
-  price       Decimal     @db.Decimal(10, 2)
-  category    String
+  price       Int         // ціна в копійках
   type        ProductType @default(MENU)
+  category    String
   imageUrl    String?
+  inStock     Boolean     @default(true)
   isActive    Boolean     @default(true)
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
@@ -78,65 +128,143 @@ model Product {
   @@map("products")
 }
 
-model GameSession {
-  id         String   @id @default(uuid())
-  type       String   @default("TIC_TAC_TOE")
-  player1Id  String
-  player2Id  String?
-  player1    User     @relation("Player1", fields: [player1Id], references: [id])
-  player2    User?    @relation("Player2", fields: [player2Id], references: [id])
-  boardState Json?
-  status     String   @default("WAITING") // WAITING, PLAYING, FINISHED
-  winnerId   String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  @@map("game_sessions")
-}
-
-model RedemptionCode {
-  id        String   @id @default(uuid())
-  code      String   @unique
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  createdAt DateTime @default(now())
-  expiresAt DateTime
-  used      Boolean  @default(false)
-  usedAt    DateTime?
-  usedBy    String?
-
-  @@map("redemption_codes")
-}
-
 model Order {
-  id         String      @id @default(uuid())
-  userId     String
-  user       User        @relation(fields: [userId], references: [id])
-  locationId String
-  location   Location    @relation(fields: [locationId], references: [id])
-  status     String      @default("PENDING")
-  totalPrice Decimal     @db.Decimal(10, 2)
-  paymentMethod String   @default("cash")
-  pickupMinutes Int      @default(10)
-  deliveryType String    @default("pickup")
-  shippingAddr String?
-  phone        String?
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
-  items      OrderItem[]
+  id             String        @id @default(cuid())
+  orderNumber    Int           @default(autoincrement())
+  userId         String
+  user           User          @relation("UserOrders", fields: [userId], references: [id])
+  locationId     String
+  location       Location      @relation(fields: [locationId], references: [id])
+  status         OrderStatus   @default(DRAFT)
+  subtotal       Int           @default(0)
+  total          Int           @default(0)
+  pickupTime     Int?          // хвилини
+  comment        String?       @db.VarChar(500)
+  paymentMethod  PaymentMethod @default(CASH)
+  processedById  String?
+  processedBy    User?         @relation("ProcessedOrders", fields: [processedById], references: [id])
+  processedAt    DateTime?
+  estimatedReady DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  items          OrderItem[]
 
   @@map("orders")
 }
 
 model OrderItem {
-  id        String  @id @default(uuid())
+  id        String  @id @default(cuid())
   orderId   String
-  order     Order   @relation(fields: [orderId], references: [id])
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   productId String
   product   Product @relation(fields: [productId], references: [id])
-  name      String
   quantity  Int
-  price     Decimal @db.Decimal(10, 2)
+  price     Int     // ціна за одиницю в копійках
+  total     Int     // price * quantity
+  options   Json?
 
   @@map("order_items")
+}
+
+model SpinHistory {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  prize      Int
+  prizeLabel String
+  latitude   Float?
+  longitude  Float?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@map("spin_history")
+}
+
+model RedemptionCode {
+  id            String    @id @default(cuid())
+  code          String    @unique
+  userId        String
+  user          User      @relation("UserRedemptions", fields: [userId], references: [id])
+  pointsSpent   Int       @default(100)
+  expiresAt     DateTime
+  usedAt        DateTime?
+  usedByAdminId String?
+  usedByAdmin   User?     @relation("AdminConfirmations", fields: [usedByAdminId], references: [id])
+  createdAt     DateTime  @default(now())
+
+  @@map("redemption_codes")
+}
+
+model GameSession {
+  id           String     @id @default(cuid())
+  type         GameType
+  player1Id    String
+  player1      User       @relation("Player1", fields: [player1Id], references: [id])
+  player2Id    String?
+  player2      User?      @relation("Player2", fields: [player2Id], references: [id])
+  boardState   Json?
+  currentTurn  String?
+  status       GameStatus @default(WAITING)
+  winnerId     String?
+  winner       User?      @relation("Winner", fields: [winnerId], references: [id])
+  score        Int?
+  securityHash String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([player1Id])
+  @@index([status])
+  @@map("game_sessions")
+}
+
+model GameScore {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  gameType     GameType
+  score        Int
+  pointsEarned Int      @default(0)
+  duration     Int?     // секунди
+  sessionId    String?
+  createdAt    DateTime @default(now())
+
+  @@map("game_scores")
+}
+
+model DailyGameLimit {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  gameType     GameType
+  date         String   // "YYYY-MM-DD" Kyiv timezone
+  pointsEarned Int      @default(0)
+
+  @@unique([userId, gameType, date])
+  @@map("daily_game_limits")
+}
+
+model RadioTrack {
+  id        String      @id @default(cuid())
+  title     String
+  artist    String      @default("PerkUp Radio")
+  src       String
+  duration  Int?        // seconds
+  isActive  Boolean     @default(true)
+  sortOrder Int         @default(0)
+  createdAt DateTime    @default(now())
+  likes     RadioLike[]
+
+  @@map("radio_tracks")
+}
+
+model RadioLike {
+  id        String     @id @default(cuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id])
+  trackId   String
+  track     RadioTrack @relation(fields: [trackId], references: [id])
+  createdAt DateTime   @default(now())
+
+  @@unique([userId, trackId])
+  @@map("radio_likes")
 }
