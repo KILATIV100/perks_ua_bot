@@ -164,12 +164,6 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, cameraY: numb
     return;
   }
 
-  if (!mascot) {
-    ctx.fillStyle = '#d4a373';
-    ctx.fillRect(sx, sy, PLAYER_W, PLAYER_H);
-    return;
-  }
-
   ctx.save();
   if (player.facing === 'left') {
     // Horizontal flip so Perkie faces movement direction.
@@ -512,7 +506,7 @@ export function PerkieJump({ telegramId, apiUrl, onScoreSubmit, mascotSrc = '/pe
       ctx.fillStyle = '#d4a373';
       ctx.font = 'bold 32px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('Perkie Jump', CANVAS_W / 2, CANVAS_H / 2 - 50);
+      ctx.fillText('Perky Jump', CANVAS_W / 2, CANVAS_H / 2 - 50);
       ctx.fillStyle = 'rgba(255,255,255,0.8)';
       ctx.font = '16px sans-serif';
       ctx.fillText('Обери режим та запускай гру', CANVAS_W / 2, CANVAS_H / 2 - 18);
