@@ -44,7 +44,7 @@ const setRoleSchema = z.object({
 
 const verifyCodeSchema = z.object({
   adminTelegramId: z.union([z.number(), z.string()]).transform(String),
-  code: z.string().regex(/^[A-Z]{2}-\d{5}$/, 'Invalid code format. Expected: XX-00000'),
+  code: z.string().regex(/^(?:[A-Z]{2}-\d{5}|\d{4})$/, 'Invalid code format. Expected: XX-00000 or 4 digits'),
 });
 
 export async function adminRoutes(
