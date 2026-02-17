@@ -174,6 +174,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: Player, cameraY: numb
 
   ctx.save();
   if (player.facing === 'left') {
+    // Horizontal flip so Perkie faces movement direction.
     ctx.translate(sx + PLAYER_W, sy);
     ctx.scale(-1, 1);
     ctx.drawImage(mascot, 0, 0, PLAYER_W, PLAYER_H);
@@ -616,8 +617,6 @@ export function PerkieJump({ telegramId, apiUrl, onScoreSubmit, mascotSrc = '/pe
           >
             ☕ Почати гру
           </button>
-        </div>
-      )}
 
       {phase === 'gameover' && (
         <button
