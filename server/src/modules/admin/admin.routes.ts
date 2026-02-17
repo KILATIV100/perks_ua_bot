@@ -85,7 +85,8 @@ async function resolveAdmin(
     (request.query as Record<string, string>)?.requesterId ||
     (request.query as Record<string, string>)?.telegramId ||
     (request.body as Record<string, string>)?.adminTelegramId ||
-    (request.body as Record<string, string>)?.requesterId;
+    (request.body as Record<string, string>)?.requesterId ||
+    (request.body as Record<string, string>)?.telegramId;
 
   if (telegramId) {
     const user = await prisma.user.findUnique({
