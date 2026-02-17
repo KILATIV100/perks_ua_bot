@@ -52,12 +52,59 @@ const UpdateStatusSchema = z.object({
   status: z.enum(['PREPARING', 'READY', 'COMPLETED', 'REJECTED']),
 });
 
+const AUTO_CANCEL_DELAY_MS = 3 * 60 * 1000;
+
 type CreateOrderBody = z.infer<typeof CreateOrderSchema>;
 
 export async function orderRoutes(
   app: FastifyInstance,
   _opts: FastifyPluginOptions
 ) {
+  const scheduleAutoCancel = (orderId: string) => {
+    setTimeout(async () => {
+      try {
+        const order = await app.prisma.order.findUnique({
+          where: { id: orderId },
+          include: {
+            user: { select: { telegramId: true } },
+            location: { select: { name: true } },
+          },
+        });
+
+        if (!order || order.status !== 'PENDING') {
+          return;
+        }
+
+        const cancelledOrder = await app.prisma.order.update({
+          where: { id: orderId },
+          data: { status: 'REJECTED' },
+        });
+
+        sendTelegramMessage(
+          Number(order.user.telegramId),
+          '❌ Замовлення скасовано. Наразі великий потік людей, бариста не може прийняти замовлення завчасно. Спробуйте замовити на місці!'
+        ).catch((err) => {
+          app.log.error({ err, orderId }, 'Failed to notify user about auto-cancelled order');
+        });
+
+        const admins = await app.prisma.user.findMany({
+          where: { role: { in: ['ADMIN', 'OWNER'] } },
+          select: { telegramId: true },
+        });
+
+        const adminText = `❌ Замовлення #${cancelledOrder.orderNumber} автоматично скасовано (минуло 3 хв)`;
+
+        for (const admin of admins) {
+          sendTelegramMessage(Number(admin.telegramId), adminText).catch((err) => {
+            app.log.error({ err, orderId, adminId: admin.telegramId }, 'Failed to notify admin about auto-cancelled order');
+          });
+        }
+      } catch (error) {
+        app.log.error({ err: error, orderId }, 'Auto-cancel order job failed');
+      }
+    }, AUTO_CANCEL_DELAY_MS);
+  };
+
   // Create new order
   app.post<{ Body: CreateOrderBody }>('/', async (request, reply) => {
     const parseResult = CreateOrderSchema.safeParse(request.body);
@@ -111,6 +158,7 @@ export async function orderRoutes(
         locationId,
         total,
         subtotal: total,
+        status: 'PENDING',
         paymentMethod,
         pickupTime: resolvedPickupTime,
         items: {
@@ -174,6 +222,8 @@ export async function orderRoutes(
       app.log.error({ err }, 'Failed to notify user about order');
     });
 
+    scheduleAutoCancel(order.id);
+
     return reply.status(201).send({
       order: {
         id: order.id,
@@ -224,7 +274,7 @@ export async function orderRoutes(
       // Notify user about status change
       const statusMessages: Record<string, string> = {
         PREPARING: `☕ *Бариста почав готувати твоє замовлення!*\n\n📍 ${order.location.name}${order.pickupTime ? `\nБуде готово через ~${order.pickupTime} хв` : ''}`,
-        READY: `✅ *Твоє замовлення готове!*\n\n📍 ${order.location.name}\nМожеш забирати! 🎉`,
+        READY: 'Твоя кава чекає на тебе! ☕️',
         COMPLETED: `🎉 *Замовлення виконано!*\nДякуємо, що обрав PerkUp! ☕`,
         REJECTED: `❌ *Замовлення скасовано.*\nВибач за незручності. Спробуй пізніше!`,
       };
@@ -236,7 +286,14 @@ export async function orderRoutes(
         });
       }
 
-      return reply.send({ success: true, order: { id, status: updated.status } });
+      return reply.send({
+        success: true,
+        order: {
+          id,
+          status: updated.status,
+          userTelegramId: order.user.telegramId,
+        },
+      });
     } catch (error) {
       app.log.error({ err: error }, 'Update order status error');
       if (error instanceof z.ZodError) {

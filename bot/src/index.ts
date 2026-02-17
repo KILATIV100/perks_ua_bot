@@ -70,6 +70,16 @@ interface AddPointsResponse {
   added: number;
 }
 
+interface OrderStatusUpdateResponse {
+  success: boolean;
+  order?: {
+    id: string;
+    status: string;
+    userTelegramId?: string;
+  };
+  error?: string;
+}
+
 // Environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const API_URL = process.env.API_URL || 'https://backend-production-5ee9.up.railway.app';
@@ -411,6 +421,15 @@ function getBroadcastKeyboard(): Keyboard {
     .resized();
 }
 
+/**
+ * Get keyboard for code verification input (with cancel button)
+ */
+function getCodeVerificationKeyboard(): Keyboard {
+  return new Keyboard()
+    .text('⬅️ Скасувати')
+    .resized();
+}
+
 // Start command (supports deep link referral: /start ref{TELEGRAM_ID})
 bot.command('start', async (ctx) => {
   const user = ctx.from;
@@ -659,7 +678,7 @@ bot.on('message:text', async (ctx) => {
     waitingForBroadcast.delete(userId);
     await ctx.reply(
       '🔍 Введи *4-значний код* купону (наприклад, 7341):',
-      { parse_mode: 'Markdown' }
+      { parse_mode: 'Markdown', reply_markup: getCodeVerificationKeyboard() }
     );
     return;
   }
@@ -733,6 +752,14 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
+  // Handle "Cancel" button during code verification
+  if (text === '⬅️ Скасувати' && waitingForCode.has(userId) && (isAdmin || isOwner)) {
+    waitingForCode.delete(userId);
+    const keyboard = isOwner ? getOwnerKeyboard() : getAdminKeyboard();
+    await ctx.reply('🏠 Перевірку коду скасовано.', { reply_markup: keyboard });
+    return;
+  }
+
   // Handle "Cancel" button during broadcast input
   if (text === '⬅️ Скасувати' && waitingForBroadcast.has(userId)) {
     waitingForBroadcast.delete(userId);
@@ -799,9 +826,10 @@ bot.on('message:text', async (ctx) => {
     // Validate code format: 4-digit code
     const codeRegex = /^\d{4}$/;
     if (!codeRegex.test(text.trim())) {
+      waitingForCode.add(userId);
       await ctx.reply(
         '❌ Невірний формат коду.\n\nОчікується: *4 цифри* (наприклад, 7341)',
-        { parse_mode: 'Markdown' }
+        { parse_mode: 'Markdown', reply_markup: getCodeVerificationKeyboard() }
       );
       return;
     }
@@ -810,16 +838,9 @@ bot.on('message:text', async (ctx) => {
     const keyboard = isOwner ? getOwnerKeyboard() : getAdminKeyboard();
 
     if (result.success) {
-      await ctx.reply(
-        `✅ *Код підтверджено!*\n\n` +
-          `Клієнт: ${result.user?.firstName || 'Невідомий'}\n` +
-          `Код: \`${text.trim()}\`\n\n` +
-          `💰 Списано 100 балів.\n` +
-          `☕ *Видайте напій!*`,
-        { parse_mode: 'Markdown', reply_markup: keyboard }
-      );
+      await ctx.reply('✅ Купон дійсний! Видайте напій', { reply_markup: keyboard });
     } else {
-      await ctx.reply(`❌ ${result.message}`, { reply_markup: keyboard });
+      await ctx.reply('❌ Код недійсний/прострочений', { reply_markup: keyboard });
     }
     return;
   }
@@ -959,90 +980,79 @@ bot.on('callback_query:data', async (ctx) => {
     return;
   }
 
-  // Handle order status transitions from Admin Chat inline buttons
-  // Format: order_<action>:<orderId>
-  const orderMatch = data.match(/^order_(accept|reject|ready|complete):(.+)$/);
-  if (orderMatch) {
-    const [, action, orderId] = orderMatch;
+  const updateOrderStatus = async (orderId: string, status: 'PREPARING' | 'READY') => {
+    const response = await fetch(`${API_URL}/api/orders/${orderId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        adminTelegramId: String(userId),
+        status,
+      }),
+    });
 
-    const statusMap: Record<string, string> = {
-      accept: 'CONFIRMED',
-      reject: 'REJECTED',
-      ready: 'READY',
-      complete: 'COMPLETED',
-    };
+    const responseData = (await response.json()) as OrderStatusUpdateResponse;
+    return { ok: response.ok, data: responseData };
+  };
 
-    const newStatus = statusMap[action];
-    if (!newStatus) {
-      await ctx.answerCallbackQuery({ text: '❌ Невідома дія' });
-      return;
-    }
+  if (data.startsWith('order_accept:')) {
+    const orderId = data.replace('order_accept:', '');
 
     try {
-      const response = await fetch(`${API_URL}/api/orders/${orderId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          adminTelegramId: String(userId),
-          status: newStatus,
-        }),
-      });
+      const result = await updateOrderStatus(orderId, 'PREPARING');
 
-      if (response.ok) {
-        const adminName = ctx.from?.first_name || `Admin ${userId}`;
-        const actionLabels: Record<string, string> = {
-          accept: '✅ Прийнято',
-          reject: '❌ Відхилено',
-          ready: '🔔 Готово',
-          complete: '✅ Завершено',
-        };
-
-        await ctx.answerCallbackQuery({ text: `${actionLabels[action]}!` });
-
-        // Update the message to show who processed the order
-        const originalText = ctx.callbackQuery.message?.text || '';
-        await ctx.editMessageText(
-          originalText + `\n\n${actionLabels[action]} — ${adminName}`,
-          { parse_mode: 'HTML' }
-        );
-      } else {
-        const err = (await response.json()) as { error?: string; message?: string };
-        await ctx.answerCallbackQuery({ text: `❌ ${err.message || err.error || 'Помилка'}` });
+      if (!result.ok) {
+        await ctx.answerCallbackQuery({ text: `❌ ${result.data.error || 'Помилка'}` });
+        return;
       }
+
+      await ctx.answerCallbackQuery({ text: '✅ Замовлення прийнято!' });
+      const adminName = ctx.from?.first_name || `Admin ${userId}`;
+      const originalText = ctx.callbackQuery.message?.text || '';
+
+      await ctx.editMessageText(
+        `${originalText}
+
+✅ Прийнято в роботу — ${adminName}`,
+        {
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '☕ Готово', callback_data: `order_ready:${orderId}` },
+            ]],
+          },
+        }
+      );
     } catch (error) {
-      console.error(`[Order ${action}] Error:`, error);
+      console.error('[Order Accept] Error:', error);
       await ctx.answerCallbackQuery({ text: '❌ Помилка з\'єднання' });
     }
     return;
   }
 
-  // Handle legacy order_accept: format
-  if (data.startsWith('order_accept:')) {
-    const orderId = data.replace('order_accept:', '');
+  if (data.startsWith('order_ready:')) {
+    const orderId = data.replace('order_ready:', '');
 
     try {
-      const response = await fetch(`${API_URL}/api/orders/${orderId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          adminTelegramId: String(userId),
-          status: 'CONFIRMED',
-        }),
-      });
+      const result = await updateOrderStatus(orderId, 'READY');
 
-      if (response.ok) {
-        await ctx.answerCallbackQuery({ text: '✅ Замовлення прийнято!' });
-        const adminName = ctx.from?.first_name || `Admin ${userId}`;
-        await ctx.editMessageText(
-          (ctx.callbackQuery.message?.text || '') + `\n\n✅ *Прийнято в роботу* — ${adminName}`,
-          { parse_mode: 'Markdown' }
-        );
-      } else {
-        const err = (await response.json()) as { error?: string };
-        await ctx.answerCallbackQuery({ text: `❌ ${err.error || 'Помилка'}` });
+      if (!result.ok) {
+        await ctx.answerCallbackQuery({ text: `❌ ${result.data.error || 'Помилка'}` });
+        return;
+      }
+
+      await ctx.answerCallbackQuery({ text: '☕ Позначено як готове!' });
+      const adminName = ctx.from?.first_name || `Admin ${userId}`;
+      const originalText = ctx.callbackQuery.message?.text || '';
+
+      await ctx.editMessageText(`${originalText}
+
+☕ Готово до видачі — ${adminName}`);
+
+      const userTelegramId = result.data.order?.userTelegramId;
+      if (userTelegramId) {
+        await bot.api.sendMessage(Number(userTelegramId), 'Твоя кава чекає на тебе! ☕️');
       }
     } catch (error) {
-      console.error('[Order Accept] Error:', error);
+      console.error('[Order Ready] Error:', error);
       await ctx.answerCallbackQuery({ text: '❌ Помилка з\'єднання' });
     }
     return;
