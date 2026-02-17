@@ -34,6 +34,7 @@ interface StatsResponse {
   newUsers: number;
   spins: number;
   freeDrinks: number;
+  orders: number;
   totalUsers: number;
   totalPointsInCirculation: number;
   generatedAt: string;
@@ -181,7 +182,7 @@ async function verifyCode(adminTelegramId: number, code: string): Promise<{ succ
     const response = await fetch(`${API_URL}/api/admin/verify-code`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ adminTelegramId, code: code.toUpperCase() }),
+      body: JSON.stringify({ adminTelegramId, code: code.trim() }),
     });
     const data = (await response.json()) as VerifyCodeResponse;
     if (response.ok) {
@@ -426,17 +427,24 @@ bot.command('start', async (ctx) => {
 
   if (!userId) return;
 
-  // Parse referral parameter from deep link (format: ref123456)
+  // Parse referral parameter from deep link (format: ref_ID or legacy ref123456)
   const startParam = ctx.match; // grammY extracts the payload after /start
   let referrerId: string | undefined;
   if (startParam && typeof startParam === 'string') {
-    const refMatch = startParam.match(/^ref(\d+)$/);
-    if (refMatch) {
-      referrerId = refMatch[1];
-      // Don't allow self-referral
-      if (Number(referrerId) === Number(userId)) {
-        referrerId = undefined;
-      }
+    // New format: ref_<userId>
+    const refNewMatch = startParam.match(/^ref_(.+)$/);
+    // Legacy format: ref<telegramId>
+    const refLegacyMatch = startParam.match(/^ref(\d+)$/);
+
+    if (refNewMatch) {
+      referrerId = refNewMatch[1];
+    } else if (refLegacyMatch) {
+      referrerId = refLegacyMatch[1];
+    }
+
+    // Don't allow self-referral
+    if (referrerId && (referrerId === String(userId))) {
+      referrerId = undefined;
     }
   }
 
@@ -662,15 +670,15 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
-  // Handle "Invite Friend" button (regular users)
+  // Handle "Invite Friend" button (all users)
   if (text === '🤝 Запросити друга') {
-    const refLink = `https://t.me/perkup_ua_bot?start=ref${userId}`;
+    // Use telegramId for referral links (the API resolves it)
+    const refLink = `https://t.me/perkup_ua_bot?start=ref_${userId}`;
     await ctx.reply(
       `🤝 *Запроси друга до PerkUp!*\n\n` +
         `Твоє реферальне посилання:\n` +
         `\`${refLink}\`\n\n` +
         `Після першого обертання колеса другом:\n` +
-        `• Друг отримає *+5 балів*\n` +
         `• Ти отримаєш *+10 балів*\n\n` +
         `Надішли це посилання другу! 👇`,
       {
@@ -716,7 +724,8 @@ bot.on('message:text', async (ctx) => {
       `📊 *Статистика за останні 24 години*\n\n` +
         `👥 Нових користувачів: *${stats.newUsers}*\n` +
         `🎡 Обертань колеса: *${stats.spins}*\n` +
-        `☕ Безкоштовних напоїв: *${stats.freeDrinks}*\n\n` +
+        `☕ Безкоштовних напоїв: *${stats.freeDrinks}*\n` +
+        `📦 Замовлень: *${stats.orders || 0}*\n\n` +
         `📈 *Загальна статистика:*\n` +
         `👤 Всього користувачів: *${stats.totalUsers}*\n` +
         `🪙 Балів в обігу: *${stats.totalPointsInCirculation}*\n\n` +
@@ -846,7 +855,7 @@ bot.on('message:text', async (ctx) => {
           `Клієнт: ${result.user?.firstName || 'Невідомий'}\n` +
           `Код: \`${normalizedCode}\`\n\n` +
           `💰 Списано 100 балів.\n` +
-          `☕ *Видайте напій до 100 грн!*`,
+          `☕ *Видайте напій!*`,
         { parse_mode: 'Markdown', reply_markup: keyboard }
       );
     } else {

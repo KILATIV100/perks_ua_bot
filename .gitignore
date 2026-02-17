@@ -14,7 +14,7 @@ build/
 .next/
 out/
 
-# Prisma
+# Prisma — using db push, migrations folder must not exist in repo
 server/prisma/migrations/
 
 # IDE

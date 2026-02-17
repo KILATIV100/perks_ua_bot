@@ -74,35 +74,20 @@ async function editTelegramMessage(
 const CreateOrderSchema = z.object({
   telegramId: z.union([z.number(), z.string()]).transform(String),
   locationId: z.string().uuid(),
-  paymentMethod: z.enum(['cash', 'telegram_pay']).default('cash'),
-  deliveryType: z.enum(['pickup', 'shipping']).default('pickup'),
-  pickupMinutes: z.number().int().min(5).max(30).optional(),
-  shippingAddr: z.string().min(5).optional(),
-  phone: z.string().min(6).optional(),
+  paymentMethod: z.enum(['CASH', 'CARD']).default('CASH'),
+  pickupTime: z.number().int().min(5).max(60).optional(),
   items: z.array(
     z.object({
       productId: z.string().uuid(),
-      name: z.string().min(1),
       quantity: z.number().int().positive(),
       price: z.number().positive(),
     })
   ).min(1),
-}).superRefine((data, ctx) => {
-  if (data.deliveryType === 'shipping') {
-    if (!data.shippingAddr) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['shippingAddr'], message: 'Shipping address is required' });
-    }
-    if (!data.phone) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['phone'], message: 'Phone is required' });
-    }
-  } else if (!data.pickupMinutes) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pickupMinutes'], message: 'Pickup minutes are required' });
-  }
 });
 
 const UpdateStatusSchema = z.object({
   adminTelegramId: z.union([z.number(), z.string()]).transform(String),
-  status: z.enum(['PREPARING', 'READY', 'COMPLETED', 'CANCELLED']),
+  status: z.enum(['PREPARING', 'READY', 'COMPLETED', 'REJECTED']),
 });
 
 type CreateOrderBody = z.infer<typeof CreateOrderSchema>;
@@ -149,11 +134,11 @@ export async function orderRoutes(
       return reply.status(404).send({ error: 'Location not found' });
     }
 
-    if (location.status === 'coming_soon') {
+    if (!location.isActive) {
       return reply.status(400).send({ error: 'Location is not yet available for orders' });
     }
 
-    if (!location.canPreorder) {
+    if (!location.hasOrdering) {
       return reply.status(400).send({ error: 'Попереднє замовлення недоступне для цієї локації. Замовляйте на місці!' });
     }
 
@@ -166,14 +151,10 @@ export async function orderRoutes(
         status: 'PENDING',
         totalPrice,
         paymentMethod,
-        pickupMinutes: resolvedPickupMinutes,
-        deliveryType,
-        shippingAddr: deliveryType === 'shipping' ? shippingAddr : null,
-        phone: deliveryType === 'shipping' ? phone : null,
+        pickupTime: resolvedPickupTime,
         items: {
           create: items.map((item) => ({
             productId: item.productId,
-            name: item.name,
             quantity: item.quantity,
             price: item.price,
             total: item.price * item.quantity,
@@ -190,9 +171,7 @@ export async function orderRoutes(
     const paymentLabel = ['cash', 'CASH'].includes(String(paymentMethod)) ? 'При отриманні' : 'Картка';
     const userName = user.firstName || user.username || `ID: ${telegramId}`;
 
-    const deliveryInfo = deliveryType === 'shipping'
-      ? `🚚 Доставка: ${shippingAddr}\n📞 Телефон: ${phone}\n\n`
-      : `⏱ Час готовності: ${resolvedPickupMinutes} хв\n\n`;
+    const pickupInfo = `⏱ Час готовності: ${resolvedPickupTime} хв\n\n`;
 
     const adminMessage =
       `🆕 *Нове замовлення #${order.id.slice(0, 8)}*\n\n` +
@@ -200,7 +179,7 @@ export async function orderRoutes(
       `📍 Локація: ${location.name}\n` +
       `💰 Сума: *${Number((order as any).totalPrice ?? totalPrice)} грн*\n` +
       `💳 Оплата: ${paymentLabel}\n` +
-      deliveryInfo +
+      pickupInfo +
       `📋 *Замовлення:*\n${itemsList}`;
 
     const actionButtons = [[
@@ -262,10 +241,7 @@ export async function orderRoutes(
         location: order.location.name,
         items: order.items,
         paymentMethod,
-        pickupMinutes: resolvedPickupMinutes,
-        deliveryType,
-        shippingAddr: deliveryType === 'shipping' ? shippingAddr : null,
-        phone: deliveryType === 'shipping' ? phone : null,
+        pickupTime: resolvedPickupTime,
         createdAt: order.createdAt,
       },
     });

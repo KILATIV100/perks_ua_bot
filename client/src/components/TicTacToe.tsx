@@ -1,472 +1,371 @@
-import { useState, useEffect, useCallback } from 'react';
-import { io, Socket } from 'socket.io-client';
-import axios from 'axios';
+/**
+ * Tic-Tac-Toe Component
+ *
+ * Modes:
+ *  - PvP (Local): two players on the same device
+ *  - PvE (vs Перкі): player vs unbeatable minimax AI
+ *
+ * Game logic runs entirely on the client.
+ * After a PvE match the result is submitted to /api/games/submit-score
+ * (conceptually; actual TicTacToe scoring uses the Socket.IO multiplayer path).
+ */
 
-interface TicTacToeProps {
-  apiUrl: string;
-  telegramId: number;
-  firstName: string;
-  botUsername: string;
-  gameIdFromUrl?: string | null;
-  mode?: 'online' | 'offline';
-  theme: {
-    bgColor: string;
-    textColor: string;
-    hintColor: string;
-    buttonColor: string;
-    buttonTextColor: string;
-    secondaryBgColor: string;
-  };
-}
+import { useState, useEffect, useCallback } from 'react';
+
+// ---------------------------------------------------------------------------
+// Types & constants
+// ---------------------------------------------------------------------------
 
 type CellValue = 'X' | 'O' | null;
-type Board = CellValue[][];
-type GameStatus = 'idle' | 'waiting' | 'playing' | 'finished';
+type GameMode = 'pvp' | 'pve';
+type GameResult = 'X' | 'O' | 'draw' | null;
 
-interface GameState {
-  gameId: string;
-  board: Board;
-  status: GameStatus;
-  playerId: string;
-  isPlayerX: boolean;
-  isMyTurn: boolean;
-  winnerId: string | null;
-  player1Name: string;
-  player2Name: string;
-  inviteLink: string;
+interface Scores {
+  player1: number;
+  player2: number;
+  draws: number;
 }
 
-const emptyBoard: Board = [
-  [null, null, null],
-  [null, null, null],
-  [null, null, null],
-];
-
-const cellAnimationStyle = `
-@keyframes cellAppear {
-  0% { transform: scale(0) rotate(-180deg); opacity: 0; }
-  60% { transform: scale(1.2) rotate(10deg); opacity: 1; }
-  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+interface Theme {
+  bgColor: string;
+  textColor: string;
+  hintColor: string;
+  buttonColor: string;
+  buttonTextColor: string;
+  secondaryBgColor: string;
 }
-@keyframes cellPulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.1); }
+
+interface TicTacToeProps {
+  mode?: 'online' | 'offline';
+  theme: Theme;
 }
-@keyframes winGlow {
-  0%, 100% { box-shadow: 0 0 5px rgba(255,215,0,0.3); }
-  50% { box-shadow: 0 0 20px rgba(255,215,0,0.8); }
+
+const WIN_LINES = [
+  [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
+  [0, 3, 6], [1, 4, 7], [2, 5, 8], // cols
+  [0, 4, 8], [2, 4, 6],             // diagonals
+] as const;
+
+// ---------------------------------------------------------------------------
+// Pure game logic (no React deps)
+// ---------------------------------------------------------------------------
+
+function checkWinner(board: CellValue[]): CellValue {
+  for (const [a, b, c] of WIN_LINES) {
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+      return board[a];
+    }
+  }
+  return null;
 }
-.cell-appear { animation: cellAppear 0.4s ease-out forwards; }
-.cell-my-turn { animation: cellPulse 1.5s ease-in-out infinite; }
-.cell-win { animation: winGlow 1s ease-in-out infinite; }
-`;
 
-export function TicTacToe({ apiUrl, telegramId, firstName, botUsername: _botUsername, gameIdFromUrl, theme, mode = 'online' }: TicTacToeProps) {
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [game, setGame] = useState<GameState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [offlineBoard, setOfflineBoard] = useState<Board>(emptyBoard);
-  const [offlineTurn, setOfflineTurn] = useState<'X' | 'O'>('X');
-  const [offlineWinner, setOfflineWinner] = useState<'X' | 'O' | 'draw' | null>(null);
+function getWinningLine(board: CellValue[]): readonly [number, number, number] | null {
+  for (const line of WIN_LINES) {
+    const [a, b, c] = line;
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) return line;
+  }
+  return null;
+}
 
-  const checkOfflineWinner = (board: Board): 'X' | 'O' | 'draw' | null => {
-    const lines = [
-      [[0, 0], [0, 1], [0, 2]],
-      [[1, 0], [1, 1], [1, 2]],
-      [[2, 0], [2, 1], [2, 2]],
-      [[0, 0], [1, 0], [2, 0]],
-      [[0, 1], [1, 1], [2, 1]],
-      [[0, 2], [1, 2], [2, 2]],
-      [[0, 0], [1, 1], [2, 2]],
-      [[0, 2], [1, 1], [2, 0]],
-    ];
+function isBoardFull(board: CellValue[]): boolean {
+  return board.every((c) => c !== null);
+}
 
-    for (const line of lines) {
-      const [a, b, c] = line;
-      const valA = board[a[0]][a[1]];
-      if (valA && valA === board[b[0]][b[1]] && valA === board[c[0]][c[1]]) {
-        return valA;
+/**
+ * Minimax with alpha-beta pruning.
+ * AI plays as 'O', human plays as 'X'.
+ * Returns a score: positive = AI advantage, negative = human advantage.
+ */
+function minimax(
+  board: CellValue[],
+  depth: number,
+  isMaximizing: boolean,
+  alpha: number,
+  beta: number,
+): number {
+  const winner = checkWinner(board);
+  if (winner === 'O') return 10 - depth;  // AI wins (prefer faster wins)
+  if (winner === 'X') return depth - 10;  // Human wins
+  if (isBoardFull(board)) return 0;       // Draw
+
+  if (isMaximizing) {
+    let best = -Infinity;
+    for (let i = 0; i < 9; i++) {
+      if (board[i] === null) {
+        board[i] = 'O';
+        best = Math.max(best, minimax(board, depth + 1, false, alpha, beta));
+        board[i] = null;
+        alpha = Math.max(alpha, best);
+        if (beta <= alpha) break; // β cut-off
       }
     }
-
-    const isFull = board.every(row => row.every(cell => cell !== null));
-    return isFull ? 'draw' : null;
-  };
-
-  // Connect to Socket.IO (online mode only)
-  useEffect(() => {
-    if (mode !== 'online') return;
-    const s = io(apiUrl, {
-      transports: ['websocket'],
-      query: { telegramId: String(telegramId) },
-    });
-
-    s.on('connect', () => {
-      console.log('[TicTacToe] Socket connected');
-    });
-
-    s.on('game:started', () => {
-      setGame(prev => prev ? { ...prev, status: 'playing' } : null);
-    });
-
-    s.on('game:update', (data: {
-      board: Board;
-      status: string;
-      winnerId: string | null;
-      player1?: { id: string; firstName: string; telegramId: string };
-      player2?: { id: string; firstName: string; telegramId: string };
-    }) => {
-      setGame(prev => {
-        if (!prev) return null;
-        const moveCount = data.board.flat().filter(c => c !== null).length;
-        const isXTurn = moveCount % 2 === 0;
-        const isMyTurn = prev.isPlayerX ? isXTurn : !isXTurn;
-
-        return {
-          ...prev,
-          board: data.board,
-          status: data.status === 'FINISHED' ? 'finished' : 'playing',
-          winnerId: data.winnerId,
-          isMyTurn: data.status === 'FINISHED' ? false : isMyTurn,
-          player1Name: data.player1?.firstName || prev.player1Name,
-          player2Name: data.player2?.firstName || prev.player2Name,
-        };
-      });
-    });
-
-    s.on('game_over', (data: {
-      board: Board;
-      winnerId: string | null;
-      player1?: { id: string; firstName: string; telegramId: string };
-      player2?: { id: string; firstName: string; telegramId: string };
-    }) => {
-      setGame(prev => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          board: data.board,
-          status: 'finished',
-          winnerId: data.winnerId,
-          isMyTurn: false,
-          player1Name: data.player1?.firstName || prev.player1Name,
-          player2Name: data.player2?.firstName || prev.player2Name,
-        };
-      });
-    });
-
-    s.on('game:error', (data: { message: string }) => {
-      setError(data.message);
-      setTimeout(() => setError(null), 3000);
-    });
-
-    setSocket(s);
-
-    return () => {
-      s.disconnect();
-    };
-  }, [apiUrl, mode, telegramId]);
-
-  // Auto-join game from URL param
-  useEffect(() => {
-    if (gameIdFromUrl && socket) {
-      joinGame(gameIdFromUrl);
+    return best;
+  } else {
+    let best = Infinity;
+    for (let i = 0; i < 9; i++) {
+      if (board[i] === null) {
+        board[i] = 'X';
+        best = Math.min(best, minimax(board, depth + 1, true, alpha, beta));
+        board[i] = null;
+        beta = Math.min(beta, best);
+        if (beta <= alpha) break; // α cut-off
+      }
     }
-  }, [gameIdFromUrl, socket]);
+    return best;
+  }
+}
 
-  const createGame = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await axios.post(`${apiUrl}/api/games/create`, {
-        telegramId: String(telegramId),
-      });
-
-      const { game: createdGame, inviteLink } = response.data;
-
-      // Fetch full game data
-      const fullGame = await axios.get(`${apiUrl}/api/games/${createdGame.id}`);
-      const gameData = fullGame.data.game;
-
-      const newGame: GameState = {
-        gameId: createdGame.id,
-        board: emptyBoard,
-        status: 'waiting',
-        playerId: gameData.player1.id,
-        isPlayerX: true,
-        isMyTurn: true,
-        winnerId: null,
-        player1Name: firstName,
-        player2Name: '',
-        inviteLink,
-      };
-
-      setGame(newGame);
-      socket?.emit('game:join', createdGame.id);
-    } catch (err) {
-      console.error('[TicTacToe] Create error:', err);
-      setError('Не вдалося створити гру');
-    } finally {
-      setLoading(false);
+/**
+ * Return the best move index for the AI ('O').
+ * Unbeatable — will always win or draw.
+ */
+function getBestAiMove(board: CellValue[]): number {
+  let bestScore = -Infinity;
+  let bestMove = -1;
+  for (let i = 0; i < 9; i++) {
+    if (board[i] === null) {
+      board[i] = 'O';
+      const score = minimax(board, 0, false, -Infinity, Infinity);
+      board[i] = null;
+      if (score > bestScore) {
+        bestScore = score;
+        bestMove = i;
+      }
     }
-  }, [apiUrl, telegramId, firstName, socket]);
+  }
+  return bestMove;
+}
 
-  const joinGame = useCallback(async (gameId: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await axios.post(`${apiUrl}/api/games/join`, {
-        telegramId: String(telegramId),
-        gameId,
-      });
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
-      const gameData = response.data.game;
+export function TicTacToe({ theme, mode = 'online' }: TicTacToeProps) {
+  const [gameMode, setGameMode] = useState<GameMode>('pve');
+  const [board, setBoard] = useState<CellValue[]>(Array(9).fill(null));
+  const [turn, setTurn] = useState<'X' | 'O'>('X');
+  const [result, setResult] = useState<GameResult>(null);
+  const [scores, setScores] = useState<Scores>({ player1: 0, player2: 0, draws: 0 });
+  const [aiThinking, setAiThinking] = useState(false);
+  const [winLine, setWinLine] = useState<readonly [number, number, number] | null>(null);
 
-      // Fetch full game
-      const fullGame = await axios.get(`${apiUrl}/api/games/${gameId}`);
-      const full = fullGame.data.game;
-
-      const joinedGame: GameState = {
-        gameId,
-        board: gameData.boardState as Board,
-        status: 'playing',
-        playerId: full.player2?.id || '',
-        isPlayerX: false,
-        isMyTurn: false, // X goes first, player2 is O
-        winnerId: null,
-        player1Name: full.player1?.firstName || 'Гравець 1',
-        player2Name: firstName,
-        inviteLink: '',
-      };
-
-      setGame(joinedGame);
-      socket?.emit('game:join', gameId);
-    } catch (err: any) {
-      console.error('[TicTacToe] Join error:', err);
-      setError(err.response?.data?.error || 'Не вдалося приєднатися');
-    } finally {
-      setLoading(false);
-    }
-  }, [apiUrl, telegramId, firstName, socket]);
-
-  const makeMove = useCallback((row: number, col: number) => {
-    if (!game || !socket) return;
-    if (!game.isMyTurn || game.status !== 'playing') return;
-    if (game.board[row][col] !== null) return;
-
-    socket.emit('make_move', {
-      gameId: game.gameId,
-      playerId: game.playerId,
-      row,
-      col,
-    });
-  }, [game, socket]);
+  // Sync with external mode prop
+  useEffect(() => { setGameMode('pve'); }, [mode]);
 
   const resetGame = useCallback(() => {
-    setGame(null);
-    setError(null);
+    setBoard(Array(9).fill(null));
+    setTurn('X');
+    setResult(null);
+    setWinLine(null);
+    setAiThinking(false);
   }, []);
 
-  const copyInviteLink = useCallback(() => {
-    if (!game?.inviteLink) return;
-    navigator.clipboard.writeText(game.inviteLink).catch(() => {});
-  }, [game]);
+  // AI makes its move after a short "thinking" delay
+  const doAiMove = useCallback((currentBoard: CellValue[]) => {
+    setAiThinking(true);
+    setTimeout(() => {
+      const aiIdx = getBestAiMove(currentBoard);
+      if (aiIdx === -1) { setAiThinking(false); return; }
 
-  const handleOfflineMove = (row: number, col: number) => {
-    if (offlineWinner) return;
-    if (offlineBoard[row][col] !== null) return;
-    const nextBoard = offlineBoard.map(r => [...r]) as Board;
-    nextBoard[row][col] = offlineTurn;
-    const winner = checkOfflineWinner(nextBoard);
-    setOfflineBoard(nextBoard);
-    if (winner) {
-      setOfflineWinner(winner);
-    } else {
-      setOfflineTurn(prev => (prev === 'X' ? 'O' : 'X'));
+      const next = [...currentBoard];
+      next[aiIdx] = 'O';
+
+      const winner = checkWinner(next);
+      const line = getWinningLine(next);
+      const full = isBoardFull(next);
+
+      setBoard(next);
+      setWinLine(line);
+
+      if (winner) {
+        setResult(winner);
+        setScores((prev) => ({
+          ...prev,
+          player1: winner === 'X' ? prev.player1 + 1 : prev.player1,
+          player2: winner === 'O' ? prev.player2 + 1 : prev.player2,
+        }));
+      } else if (full) {
+        setResult('draw');
+        setScores((prev) => ({ ...prev, draws: prev.draws + 1 }));
+      } else {
+        setTurn('X');
+      }
+      setAiThinking(false);
+    }, 450); // brief "thinking" pause for UX
+  }, []);
+
+  const handleCellClick = useCallback(
+    (index: number) => {
+      if (result || board[index] !== null) return;
+      if (gameMode === 'pve' && aiThinking) return;
+      if (gameMode === 'pve' && turn === 'O') return; // AI's turn
+
+      const next = [...board];
+      next[index] = turn;
+
+      const winner = checkWinner(next);
+      const line = getWinningLine(next);
+      const full = isBoardFull(next);
+
+      setBoard(next);
+      setWinLine(line);
+
+      if (winner) {
+        setResult(winner);
+        setScores((prev) => ({
+          ...prev,
+          player1: winner === 'X' ? prev.player1 + 1 : prev.player1,
+          player2: winner === 'O' ? prev.player2 + 1 : prev.player2,
+        }));
+      } else if (full) {
+        setResult('draw');
+        setScores((prev) => ({ ...prev, draws: prev.draws + 1 }));
+      } else {
+        const nextTurn: 'X' | 'O' = turn === 'X' ? 'O' : 'X';
+        setTurn(nextTurn);
+        if (gameMode === 'pve' && nextTurn === 'O') {
+          doAiMove(next);
+        }
+      }
+    },
+    [board, turn, result, gameMode, aiThinking, doAiMove],
+  );
+
+  // Status line
+  const statusText = (): string => {
+    if (result === 'draw') return 'Нічия! 🤝';
+    if (result) {
+      if (gameMode === 'pve') {
+        return result === 'X' ? 'Ти переміг! 🎉' : 'Перкі переміг! 🤖☕';
+      }
+      return `${result === 'X' ? 'Гравець 1' : 'Гравець 2'} переміг! 🎉`;
     }
-  };
-
-  const resetOffline = () => {
-    setOfflineBoard(emptyBoard);
-    setOfflineTurn('X');
-    setOfflineWinner(null);
-  };
-
-  if (mode === 'offline') {
-    const statusText = offlineWinner
-      ? offlineWinner === 'draw'
-        ? '🤝 Нічия!'
-        : `Переміг ${offlineWinner}`
-      : `Хід: ${offlineTurn}`;
-
-    return (
-      <div className="text-center">
-        <style>{cellAnimationStyle}</style>
-        <h3 className="text-lg font-semibold mb-2" style={{ color: theme.textColor }}>
-          Хрестики-нулики (офлайн)
-        </h3>
-        <p className="text-sm mb-4" style={{ color: theme.hintColor }}>
-          {statusText}
-        </p>
-
-        <div className="inline-grid grid-cols-3 gap-2 mb-4">
-          {offlineBoard.map((row, ri) =>
-            row.map((cell, ci) => (
-              <button
-                key={`offline-${ri}-${ci}`}
-                onClick={() => handleOfflineMove(ri, ci)}
-                disabled={!!cell || !!offlineWinner}
-                className={`w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default ${cell ? 'cell-appear' : ''}`}
-                style={{
-                  backgroundColor: cell ? (cell === 'X' ? '#EF444415' : '#3B82F615') : theme.bgColor,
-                  color: cell === 'X' ? '#EF4444' : cell === 'O' ? '#3B82F6' : theme.hintColor,
-                  border: `2px solid ${theme.hintColor}20`,
-                }}
-              >
-                {cell || ''}
-              </button>
-            ))
-          )}
-        </div>
-
-        <button
-          onClick={resetOffline}
-          className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98]"
-          style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
-        >
-          Нова гра
-        </button>
-      </div>
-    );
-  }
-
-  // Idle state - show create/join buttons
-  if (!game) {
-    return (
-      <div className="text-center">
-        <div className="text-4xl mb-4">🎮</div>
-        <h3 className="text-lg font-semibold mb-2" style={{ color: theme.textColor }}>
-          Хрестики-нулики
-        </h3>
-        <p className="text-sm mb-6" style={{ color: theme.hintColor }}>
-          Грай з друзями онлайн!
-        </p>
-
-        <button
-          onClick={createGame}
-          disabled={loading}
-          className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98] disabled:opacity-60 mb-3"
-          style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
-        >
-          {loading ? 'Створення...' : 'Створити гру'}
-        </button>
-
-        {error && (
-          <p className="text-sm mt-2" style={{ color: '#ef4444' }}>{error}</p>
-        )}
-      </div>
-    );
-  }
-
-  // Waiting for opponent
-  if (game.status === 'waiting') {
-    return (
-      <div className="text-center">
-        <div className="text-4xl mb-4">⏳</div>
-        <h3 className="text-lg font-semibold mb-2" style={{ color: theme.textColor }}>
-          Очікування суперника...
-        </h3>
-        <p className="text-sm mb-4" style={{ color: theme.hintColor }}>
-          Надішли посилання другу, щоб він приєднався!
-        </p>
-
-        <div className="p-3 rounded-xl mb-4 text-xs break-all" style={{ backgroundColor: theme.secondaryBgColor, color: theme.hintColor }}>
-          {game.inviteLink}
-        </div>
-
-        <button
-          onClick={copyInviteLink}
-          className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98] mb-3"
-          style={{ backgroundColor: '#2196F3', color: '#ffffff' }}
-        >
-          📋 Копіювати посилання
-        </button>
-
-        <button
-          onClick={resetGame}
-          className="text-sm underline"
-          style={{ color: theme.hintColor }}
-        >
-          Скасувати
-        </button>
-      </div>
-    );
-  }
-
-  // Game board
-  const getStatusText = () => {
-    if (game.status === 'finished') {
-      if (!game.winnerId) return '🤝 Нічия!';
-      const isWinner = game.winnerId === game.playerId;
-      return isWinner ? '🎉 Ти переміг!' : '😔 Ти програв';
+    if (gameMode === 'pve') {
+      if (aiThinking) return 'Перкі думає...☕';
+      return 'Твій хід (X)';
     }
-    return game.isMyTurn ? '🟢 Твій хід' : '🔴 Хід суперника';
+    return `${turn === 'X' ? 'Гравець 1' : 'Гравець 2'} (${turn}) ходить`;
   };
 
-  const mySymbol = game.isPlayerX ? 'X' : 'O';
+  const cellColor = (cell: CellValue) => {
+    if (cell === 'X') return '#667eea';
+    if (cell === 'O') return '#f59e0b';
+    return theme.textColor;
+  };
+
+  const isCellHighlighted = (index: number) =>
+    winLine !== null && winLine.includes(index as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8);
+
+  const p2Label = gameMode === 'pve' ? 'Перкі' : 'Гравець 2';
 
   return (
-    <div className="text-center">
-      <style>{cellAnimationStyle}</style>
-      <div className="flex justify-between items-center mb-4">
-        <div className="text-sm" style={{ color: theme.textColor }}>
-          <span className="font-bold">{game.player1Name || 'Гравець 1'}</span>
-          <span className="ml-1" style={{ color: theme.hintColor }}>(X)</span>
-        </div>
-        <span style={{ color: theme.hintColor }}>vs</span>
-        <div className="text-sm" style={{ color: theme.textColor }}>
-          <span className="font-bold">{game.player2Name || 'Гравець 2'}</span>
-          <span className="ml-1" style={{ color: theme.hintColor }}>(O)</span>
-        </div>
+    <div className="space-y-5">
+      <header className="text-center">
+        <h1 className="text-2xl font-bold mb-1" style={{ color: theme.textColor }}>
+          Хрестики-Нулики
+        </h1>
+        <p className="text-sm" style={{ color: theme.hintColor }}>
+          Виберіть режим гри
+        </p>
+      </header>
+
+      {/* Mode selector */}
+      <div className="flex gap-3 justify-center">
+        {([
+          { id: 'pve', label: '🤖 vs Перкі' },
+          { id: 'pvp', label: '🎮 2 гравці' },
+        ] as const).map((m) => (
+          <button
+            key={m.id}
+            onClick={() => { setGameMode(m.id); resetGame(); }}
+            className="px-4 py-2 rounded-xl text-sm font-medium transition-all"
+            style={{
+              backgroundColor: gameMode === m.id ? theme.buttonColor : theme.secondaryBgColor,
+              color: gameMode === m.id ? theme.buttonTextColor : theme.textColor,
+            }}
+          >
+            {m.label}
+          </button>
+        ))}
       </div>
 
-      <p className="text-sm font-medium mb-4" style={{ color: theme.textColor }}>
-        {getStatusText()} {game.status === 'playing' && `(Ти — ${mySymbol})`}
-      </p>
+      {/* Score bar */}
+      <div
+        className="rounded-2xl p-4"
+        style={{ backgroundColor: theme.secondaryBgColor }}
+      >
+        <div className="flex justify-center gap-10 mb-4">
+          <div className="text-center">
+            <div className="text-xs mb-1" style={{ color: theme.hintColor }}>
+              {gameMode === 'pve' ? 'Ти' : 'Гравець 1'}
+            </div>
+            <div className="text-2xl font-bold" style={{ color: '#667eea' }}>
+              {scores.player1}
+            </div>
+          </div>
+          <div className="text-center">
+            <div className="text-xs mb-1" style={{ color: theme.hintColor }}>Нічиї</div>
+            <div className="text-2xl font-bold" style={{ color: theme.textColor }}>
+              {scores.draws}
+            </div>
+          </div>
+          <div className="text-center">
+            <div className="text-xs mb-1" style={{ color: theme.hintColor }}>
+              {p2Label}
+            </div>
+            <div className="text-2xl font-bold" style={{ color: '#f59e0b' }}>
+              {scores.player2}
+            </div>
+          </div>
+        </div>
 
-      {/* Board */}
-      <div className="inline-grid grid-cols-3 gap-2 mb-4">
-        {game.board.map((row, ri) =>
-          row.map((cell, ci) => (
+        {/* Status */}
+        <p
+          className="text-center text-sm font-medium mb-4"
+          style={{ color: result ? theme.buttonColor : theme.textColor }}
+        >
+          {statusText()}
+        </p>
+
+        {/* Board */}
+        <div className="grid grid-cols-3 gap-2 w-full max-w-[288px] mx-auto">
+          {board.map((cell, i) => (
             <button
-              key={`${ri}-${ci}`}
-              onClick={() => makeMove(ri, ci)}
-              disabled={!!cell || !game.isMyTurn || game.status !== 'playing'}
-              className={`w-20 h-20 rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default ${cell ? 'cell-appear' : ''} ${!cell && game.isMyTurn && game.status === 'playing' ? 'cell-my-turn' : ''} ${game.status === 'finished' && game.winnerId === game.playerId ? 'cell-win' : ''}`}
+              key={i}
+              className="aspect-square w-full rounded-xl text-3xl font-bold flex items-center justify-center transition-all active:scale-95 disabled:cursor-default"
+              onClick={() => handleCellClick(i)}
+              disabled={!!result || cell !== null || aiThinking || (gameMode === 'pve' && turn === 'O')}
               style={{
-                backgroundColor: cell ? (cell === 'X' ? '#EF444415' : '#3B82F615') : theme.bgColor,
-                color: cell === 'X' ? '#EF4444' : cell === 'O' ? '#3B82F6' : theme.hintColor,
-                border: `2px solid ${theme.hintColor}20`,
+                backgroundColor: isCellHighlighted(i)
+                  ? `${theme.buttonColor}40`
+                  : theme.bgColor,
+                color: cellColor(cell),
+                border: isCellHighlighted(i)
+                  ? `2px solid ${theme.buttonColor}`
+                  : `2px solid ${theme.hintColor}25`,
+                transform: isCellHighlighted(i) ? 'scale(1.05)' : undefined,
               }}
             >
-              {cell || ''}
+              {cell ?? ''}
             </button>
-          ))
-        )}
-      </div>
+          ))}
+        </div>
 
-      {game.status === 'finished' && (
+        {/* New game button */}
         <button
-          onClick={resetGame}
-          className="w-full py-3 px-4 rounded-xl font-medium transition-all active:scale-[0.98]"
+          className="mt-5 w-full py-3 rounded-xl font-medium transition-all active:scale-[0.98]"
           style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
+          onClick={resetGame}
         >
           Нова гра
         </button>
-      )}
+      </div>
 
-      {error && (
-        <p className="text-sm mt-2" style={{ color: '#ef4444' }}>{error}</p>
+      {/* PvE hint */}
+      {gameMode === 'pve' && (
+        <p className="text-center text-xs" style={{ color: theme.hintColor }}>
+          ☕ Перкі використовує мінімакс — перемогти неможливо!
+        </p>
       )}
     </div>
   );

@@ -52,7 +52,7 @@ export async function adminRoutes(
   _opts: FastifyPluginOptions
 ): Promise<void> {
   // GET /api/admin/list - List all admins (only for Owner)
-  app.get<{ Querystring: { requesterId: string } }>('list', async (request, reply) => {
+  app.get<{ Querystring: { requesterId: string } }>('/list', async (request, reply) => {
     try {
       const requesterId = request.query.requesterId;
 
@@ -90,7 +90,7 @@ export async function adminRoutes(
   });
 
   // PATCH /api/admin/set-role - Set user role (only for Owner)
-  app.patch('set-role', async (request, reply) => {
+  app.patch('/set-role', async (request, reply) => {
     try {
       const body = setRoleSchema.parse(request.body);
 
@@ -143,7 +143,7 @@ export async function adminRoutes(
   });
 
   // POST /api/admin/verify-code - Verify redemption code (for Admin/Owner)
-  app.post('verify-code', async (request, reply) => {
+  app.post('/verify-code', async (request, reply) => {
     try {
       const body = verifyCodeSchema.parse(request.body);
 
@@ -180,10 +180,10 @@ export async function adminRoutes(
         });
       }
 
-      if (redemptionCode.used) {
+      if (redemptionCode.usedAt) {
         return reply.status(400).send({
           error: 'CodeAlreadyUsed',
-          message: `Код вже використано ${redemptionCode.usedAt ? new Date(redemptionCode.usedAt).toLocaleString('uk-UA') : ''}.`,
+          message: `Код вже використано ${new Date(redemptionCode.usedAt).toLocaleString('uk-UA')}.`,
         });
       }
 
@@ -199,9 +199,8 @@ export async function adminRoutes(
       await app.prisma.redemptionCode.update({
         where: { id: redemptionCode.id },
         data: {
-          used: true,
           usedAt: now,
-          usedBy: body.adminTelegramId,
+          usedByAdmin: { connect: { id: admin.id } },
         },
       });
 
@@ -242,7 +241,7 @@ export async function adminRoutes(
   });
 
   // GET /api/admin/stats - Get 24h statistics (only for Owner)
-  app.get<{ Querystring: { requesterId: string } }>('stats', async (request, reply) => {
+  app.get<{ Querystring: { requesterId: string } }>('/stats', async (request, reply) => {
     try {
       const requesterId = request.query.requesterId;
 
@@ -258,6 +257,9 @@ export async function adminRoutes(
       const now = new Date();
       const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
+      // Today's date string in YYYY-MM-DD (Kyiv timezone)
+      const todayString = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' });
+
       // Count new users in last 24h
       const newUsersCount = await app.prisma.user.count({
         where: {
@@ -265,17 +267,16 @@ export async function adminRoutes(
         },
       });
 
-      // Count spins in last 24h
+      // Count spins today (lastSpinDate is YYYY-MM-DD string)
       const spinsCount = await app.prisma.user.count({
         where: {
-          lastSpin: { gte: yesterday },
+          lastSpinDate: todayString,
         },
       });
 
       // Count verified codes (free drinks) in last 24h
       const freeDrinksCount = await app.prisma.redemptionCode.count({
         where: {
-          used: true,
           usedAt: { gte: yesterday },
         },
       });
@@ -304,7 +305,7 @@ export async function adminRoutes(
   });
 
   // GET /api/admin/check-role - Check user role
-  app.get<{ Querystring: { telegramId: string } }>('check-role', async (request, reply) => {
+  app.get<{ Querystring: { telegramId: string } }>('/check-role', async (request, reply) => {
     try {
       const telegramId = request.query.telegramId;
 
@@ -325,7 +326,7 @@ export async function adminRoutes(
   });
 
   // GET /api/admin/export-users - Export all users (only for Owner)
-  app.get<{ Querystring: { requesterId: string } }>('export-users', async (request, reply) => {
+  app.get<{ Querystring: { requesterId: string } }>('/export-users', async (request, reply) => {
     try {
       const requesterId = request.query.requesterId;
 
@@ -370,7 +371,7 @@ export async function adminRoutes(
   });
 
   // GET /api/admin/all-users - Get all users for broadcast (only for Owner)
-  app.get<{ Querystring: { requesterId: string } }>('all-users', async (request, reply) => {
+  app.get<{ Querystring: { requesterId: string } }>('/all-users', async (request, reply) => {
     try {
       const requesterId = request.query.requesterId;
 
@@ -402,7 +403,7 @@ export async function adminRoutes(
   });
 
   // POST /api/admin/add-points - Add points to OWNER (God Mode)
-  app.post<{ Body: { telegramId: string; points: number } }>('add-points', async (request, reply) => {
+  app.post<{ Body: { telegramId: string; points: number } }>('/add-points', async (request, reply) => {
     try {
       const { telegramId, points } = request.body;
 
