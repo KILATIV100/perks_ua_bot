@@ -2,49 +2,88 @@ import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const ADMIN_GROUP_ID = process.env.ADMIN_GROUP_ID;
+const AUTO_CANCEL_MS = 5 * 60 * 1000;
 
-/**
- * Send message to a Telegram user with optional inline keyboard
- */
+interface TelegramMessageResponse {
+  ok: boolean;
+  result?: {
+    message_id: number;
+  };
+}
+
+async function telegramRequest(method: string, payload: Record<string, unknown>): Promise<TelegramMessageResponse | null> {
+  if (!BOT_TOKEN) return null;
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    return (await response.json()) as TelegramMessageResponse;
+  } catch (error) {
+    console.log(`[Telegram] Error calling ${method}:`, error);
+    return null;
+  }
+}
+
 async function sendTelegramMessage(
   chatId: number | string,
   text: string,
   inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>
-): Promise<void> {
-  if (!BOT_TOKEN) return;
+): Promise<number | null> {
+  const body: Record<string, unknown> = {
+    chat_id: chatId,
+    text,
+    parse_mode: 'Markdown',
+  };
 
-  try {
-    const body: Record<string, unknown> = {
-      chat_id: chatId,
-      text,
-      parse_mode: 'Markdown',
-    };
-    if (inlineKeyboard) {
-      body.reply_markup = { inline_keyboard: inlineKeyboard };
-    }
-
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  } catch (error) {
-    console.log('[Telegram] Error sending message:', error);
+  if (inlineKeyboard) {
+    body.reply_markup = { inline_keyboard: inlineKeyboard };
   }
+
+  const response = await telegramRequest('sendMessage', body);
+  if (!response?.ok || !response.result) return null;
+  return response.result.message_id;
+}
+
+async function editTelegramMessage(
+  chatId: number | string,
+  messageId: number,
+  text: string,
+  inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>
+): Promise<void> {
+  const body: Record<string, unknown> = {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: 'Markdown',
+  };
+
+  if (inlineKeyboard) {
+    body.reply_markup = { inline_keyboard: inlineKeyboard };
+  } else {
+    body.reply_markup = { inline_keyboard: [] };
+  }
+
+  await telegramRequest('editMessageText', body);
 }
 
 const CreateOrderSchema = z.object({
   telegramId: z.union([z.number(), z.string()]).transform(String),
   locationId: z.string().uuid(),
-  paymentMethod: z.enum(['cash', 'telegram_pay']).default('cash'),
+  paymentMethod: z.enum(['cash', 'telegram_pay', 'CASH', 'CARD']).default('cash'),
   deliveryType: z.enum(['pickup', 'shipping']).default('pickup'),
   pickupMinutes: z.number().int().min(5).max(30).optional(),
+  pickupTime: z.number().int().min(5).max(30).optional(),
   shippingAddr: z.string().min(5).optional(),
   phone: z.string().min(6).optional(),
   items: z.array(
     z.object({
       productId: z.string().uuid(),
-      name: z.string().min(1),
+      name: z.string().min(1).optional(),
       quantity: z.number().int().positive(),
       price: z.number().positive(),
     })
@@ -57,8 +96,8 @@ const CreateOrderSchema = z.object({
     if (!data.phone) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['phone'], message: 'Phone is required' });
     }
-  } else if (!data.pickupMinutes) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pickupMinutes'], message: 'Pickup minutes are required' });
+  } else if (!data.pickupMinutes && !data.pickupTime) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pickupMinutes'], message: 'Pickup time is required' });
   }
 });
 
@@ -69,11 +108,25 @@ const UpdateStatusSchema = z.object({
 
 type CreateOrderBody = z.infer<typeof CreateOrderSchema>;
 
+type OrderStatusLiteral = 'PENDING' | 'PREPARING' | 'READY' | 'COMPLETED' | 'CANCELLED' | 'CANCELED';
+
+async function updateOrderStatus(prismaOrder: any, id: string, status: OrderStatusLiteral): Promise<any> {
+  try {
+    return await prismaOrder.update({ where: { id }, data: { status } });
+  } catch (error) {
+    if (status === 'CANCELLED') {
+      return prismaOrder.update({ where: { id }, data: { status: 'CANCELED' } });
+    }
+    throw error;
+  }
+}
+
 export async function orderRoutes(
   app: FastifyInstance,
   _opts: FastifyPluginOptions
 ) {
-  // Create new order
+  const prismaOrder = app.prisma.order as any;
+
   app.post<{ Body: CreateOrderBody }>('', async (request, reply) => {
     const parseResult = CreateOrderSchema.safeParse(request.body);
 
@@ -84,23 +137,16 @@ export async function orderRoutes(
       });
     }
 
-    const { telegramId, locationId, items, paymentMethod, pickupMinutes, deliveryType, shippingAddr, phone } = parseResult.data;
-    const resolvedPickupMinutes = deliveryType === 'shipping' ? 10 : (pickupMinutes ?? 10);
+    const { telegramId, locationId, items, paymentMethod, pickupMinutes, pickupTime, deliveryType, shippingAddr, phone } = parseResult.data;
+    const resolvedDeliveryType = deliveryType ?? 'pickup';
+    const resolvedPickupMinutes = resolvedDeliveryType === 'shipping' ? 10 : (pickupMinutes ?? pickupTime ?? 10);
 
-    // Find user
-    const user = await app.prisma.user.findUnique({
-      where: { telegramId },
-    });
-
+    const user = await app.prisma.user.findUnique({ where: { telegramId } });
     if (!user) {
       return reply.status(404).send({ error: 'User not found. Sync user first.' });
     }
 
-    // Check location exists and is active
-    const location = await app.prisma.location.findUnique({
-      where: { id: locationId },
-    });
-
+    const location = await app.prisma.location.findUnique({ where: { id: locationId } });
     if (!location) {
       return reply.status(404).send({ error: 'Location not found' });
     }
@@ -113,29 +159,26 @@ export async function orderRoutes(
       return reply.status(400).send({ error: 'Попереднє замовлення недоступне для цієї локації. Замовляйте на місці!' });
     }
 
-    // Calculate total price
-    const totalPrice = items.reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0
-    );
+    const totalPrice = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-    // Create order with items
-    const order = await app.prisma.order.create({
+    const order = await prismaOrder.create({
       data: {
         userId: user.id,
         locationId,
+        status: 'PENDING',
         totalPrice,
         paymentMethod,
         pickupMinutes: resolvedPickupMinutes,
-        deliveryType,
-        shippingAddr: deliveryType === 'shipping' ? shippingAddr : null,
-        phone: deliveryType === 'shipping' ? phone : null,
+        deliveryType: resolvedDeliveryType,
+        shippingAddr: resolvedDeliveryType === 'shipping' ? shippingAddr : null,
+        phone: resolvedDeliveryType === 'shipping' ? phone : null,
         items: {
           create: items.map((item) => ({
             productId: item.productId,
-            name: item.name,
+            name: item.name ?? 'Товар',
             quantity: item.quantity,
             price: item.price,
+            total: item.price * item.quantity,
           })),
         },
       },
@@ -145,94 +188,106 @@ export async function orderRoutes(
       },
     });
 
-    app.log.info(`[Order Created] id: ${order.id}, user: ${telegramId}, total: ${totalPrice}, location: ${location.name}`);
-
-    // Build order details for notification
-    const itemsList = items.map(i => `  • ${i.name} x${i.quantity} — ${i.price * i.quantity} грн`).join('\n');
-    const paymentLabel = paymentMethod === 'cash' ? 'При отриманні' : 'Telegram Pay';
+    const itemsList = items.map(i => `  • ${i.name ?? 'Товар'} x${i.quantity} — ${i.price * i.quantity} грн`).join('\n');
+    const paymentLabel = ['cash', 'CASH'].includes(String(paymentMethod)) ? 'При отриманні' : 'Картка';
     const userName = user.firstName || user.username || `ID: ${telegramId}`;
 
-    const deliveryInfo = deliveryType === 'shipping'
+    const deliveryInfo = resolvedDeliveryType === 'shipping'
       ? `🚚 Доставка: ${shippingAddr}\n📞 Телефон: ${phone}\n\n`
       : `⏱ Час готовності: ${resolvedPickupMinutes} хв\n\n`;
 
     const adminMessage =
-      `🆕 *Нове замовлення!*\n\n` +
+      `🆕 *Нове замовлення #${order.id.slice(0, 8)}*\n\n` +
       `👤 Клієнт: ${userName}\n` +
       `📍 Локація: ${location.name}\n` +
-      `💰 Сума: *${totalPrice} грн*\n` +
+      `💰 Сума: *${Number((order as any).totalPrice ?? totalPrice)} грн*\n` +
       `💳 Оплата: ${paymentLabel}\n` +
       deliveryInfo +
       `📋 *Замовлення:*\n${itemsList}`;
 
-    const acceptButton = [[
-      { text: '✅ Прийняти в роботу', callback_data: `order_accept:${order.id}` },
+    const actionButtons = [[
+      { text: '✅ Прийняти', callback_data: `order_accept:${order.id}` },
+      { text: '❌ Відхилити', callback_data: `order_reject:${order.id}` },
     ]];
 
-    // Notify all admins and owner
-    const admins = await app.prisma.user.findMany({
-      where: { role: { in: ['ADMIN', 'OWNER'] } },
-      select: { telegramId: true },
-    });
-
-    for (const admin of admins) {
-      sendTelegramMessage(Number(admin.telegramId), adminMessage, acceptButton).catch(err => {
-        app.log.error({ err }, `Failed to notify admin ${admin.telegramId}`);
-      });
+    let adminMessageId: number | null = null;
+    if (ADMIN_GROUP_ID) {
+      adminMessageId = await sendTelegramMessage(ADMIN_GROUP_ID, adminMessage, actionButtons);
+    } else {
+      app.log.warn('ADMIN_GROUP_ID is not configured, admin order notifications are disabled');
     }
 
-    // Confirm to user
     sendTelegramMessage(
       Number(telegramId),
-      `✅ *Замовлення прийнято!*\n\n` +
-      `📍 ${location.name}\n` +
-      `💰 Сума: *${totalPrice} грн*\n` +
-      (deliveryType === 'shipping'
-        ? `🚚 Ми зв'яжемося з вами щодо доставки.\n\n`
-        : `⏱ Очікуйте ~${resolvedPickupMinutes} хв\n\n`) +
-      `Ми повідомимо, коли бариста почне готувати!`
-    ).catch(err => {
-      app.log.error({ err }, 'Failed to notify user about order');
+      `⏳ *Замовлення відправлено!*\nОчікуємо підтвердження від баристи...`
+    ).catch((err) => {
+      app.log.error({ err }, 'Failed to notify user about pending order');
     });
+
+    setTimeout(async () => {
+      try {
+        const current = await prismaOrder.findUnique({
+          where: { id: order.id },
+          include: { user: { select: { telegramId: true } } },
+        });
+
+        if (!current || current.status !== 'PENDING') {
+          return;
+        }
+
+        await updateOrderStatus(prismaOrder, order.id, 'CANCELLED');
+
+        await sendTelegramMessage(
+          Number(current.user.telegramId),
+          `❌ Наразі великий потік людей, бариста не може прийняти замовлення завчасно. Будь ласка, замовляйте на місці!`
+        );
+
+        if (ADMIN_GROUP_ID && adminMessageId) {
+          await editTelegramMessage(
+            ADMIN_GROUP_ID,
+            adminMessageId,
+            `${adminMessage}\n\n⏳ *Автоматично скасовано (немає відповіді)*`
+          );
+        }
+      } catch (error) {
+        app.log.error({ err: error, orderId: order.id }, 'Failed to auto-cancel pending order');
+      }
+    }, AUTO_CANCEL_MS);
+
+    app.log.info(`[Order Created] id: ${order.id}, user: ${telegramId}, total: ${totalPrice}, location: ${location.name}`);
 
     return reply.status(201).send({
       order: {
         id: order.id,
         status: order.status,
-        totalPrice: order.totalPrice.toString(),
+        totalPrice: String((order as any).totalPrice ?? (order as any).total ?? 0),
         location: order.location.name,
         items: order.items,
         paymentMethod,
         pickupMinutes: resolvedPickupMinutes,
-        deliveryType,
-        shippingAddr: deliveryType === 'shipping' ? shippingAddr : null,
-        phone: deliveryType === 'shipping' ? phone : null,
+        deliveryType: resolvedDeliveryType,
+        shippingAddr: resolvedDeliveryType === 'shipping' ? shippingAddr : null,
+        phone: resolvedDeliveryType === 'shipping' ? phone : null,
         createdAt: order.createdAt,
       },
     });
   });
 
-  // PATCH /api/orders/:id/status - Update order status (Admin/Owner)
   app.patch<{ Params: { id: string } }>(':id/status', async (request, reply) => {
     try {
       const { id } = request.params;
       const body = UpdateStatusSchema.parse(request.body);
 
-      // Check admin permission
-      const admin = await app.prisma.user.findUnique({
-        where: { telegramId: body.adminTelegramId },
-      });
-
+      const admin = await app.prisma.user.findUnique({ where: { telegramId: body.adminTelegramId } });
       if (!admin || (admin.role !== 'ADMIN' && admin.role !== 'OWNER')) {
         return reply.status(403).send({ error: 'Access denied' });
       }
 
-      const order = await app.prisma.order.findUnique({
+      const order = await prismaOrder.findUnique({
         where: { id },
         include: {
-          user: { select: { telegramId: true, firstName: true } },
+          user: { select: { telegramId: true } },
           location: { select: { name: true } },
-          items: true,
         },
       });
 
@@ -240,32 +295,32 @@ export async function orderRoutes(
         return reply.status(404).send({ error: 'Order not found' });
       }
 
-      const updated = await app.prisma.order.update({
-        where: { id },
-        data: { status: body.status },
-      });
+      if ((order.status === 'CANCELLED' || order.status === 'CANCELED') || order.status === 'COMPLETED') {
+        return reply.status(409).send({ error: `Order already ${order.status.toLowerCase()}` });
+      }
 
-      // Notify user about status change
-      const isShipping = order.deliveryType === 'shipping';
+      const updated = await updateOrderStatus(prismaOrder, id, body.status as OrderStatusLiteral);
+
+      const isShipping = (order.deliveryType ?? 'pickup') === 'shipping';
       const statusMessages: Record<string, string> = {
         PREPARING: isShipping
           ? `📦 *Ми готуємо твоє замовлення до відправки!*\n\n📍 ${order.location.name}`
-          : `☕ *Бариста почав готувати твоє замовлення!*\n\n📍 ${order.location.name}\nБуде готово через ~${order.pickupMinutes} хв`,
+          : `✅ Замовлення прийнято! Бариста почав готувати. Буде готово через ~${order.pickupMinutes ?? order.pickupTime ?? 10} хв.`,
         READY: isShipping
           ? `✅ *Замовлення готове до відправки!*\n\nМи надішлемо інформацію про доставку найближчим часом.`
           : `✅ *Твоє замовлення готове!*\n\n📍 ${order.location.name}\nМожеш забирати! 🎉`,
         COMPLETED: `🎉 *Замовлення виконано!*\nДякуємо, що обрав PerkUp! ☕`,
-        CANCELLED: `❌ *Замовлення скасовано.*\nВибач за незручності. Спробуй пізніше!`,
+        CANCELLED: `❌ На жаль, бариста зараз не може прийняти замовлення. Спробуй пізніше або замов на місці.`,
       };
 
       const userMessage = statusMessages[body.status];
       if (userMessage) {
-        sendTelegramMessage(Number(order.user.telegramId), userMessage).catch(err => {
+        sendTelegramMessage(Number(order.user.telegramId), userMessage).catch((err) => {
           app.log.error({ err }, 'Failed to notify user about status change');
         });
       }
 
-      return reply.send({ success: true, order: { id, status: updated.status } });
+      return reply.send({ success: true, order: { id, status: updated.status, pickupMinutes: updated.pickupMinutes ?? updated.pickupTime ?? 10 } });
     } catch (error) {
       app.log.error({ err: error }, 'Update order status error');
       if (error instanceof z.ZodError) {
@@ -275,57 +330,49 @@ export async function orderRoutes(
     }
   });
 
-  // Get orders by telegram user
-  app.get<{ Querystring: { telegramId: string } }>(
-    '',
-    async (request, reply) => {
-      const { telegramId } = request.query;
+  app.get<{ Querystring: { telegramId: string } }>('', async (request, reply) => {
+    const { telegramId } = request.query;
 
-      if (!telegramId) {
-        return reply.status(400).send({ error: 'telegramId is required' });
-      }
-
-      const user = await app.prisma.user.findUnique({
-        where: { telegramId },
-      });
-
-      if (!user) {
-        return reply.send({ orders: [] });
-      }
-
-      const orders = await app.prisma.order.findMany({
-        where: { userId: user.id },
-        include: {
-          items: true,
-          location: { select: { name: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 10,
-      });
-
-      return reply.send({
-        orders: orders.map((order: (typeof orders)[number]) => ({
-          id: order.id,
-          status: order.status,
-          totalPrice: order.totalPrice.toString(),
-          location: order.location.name,
-          items: order.items,
-          paymentMethod: order.paymentMethod,
-          pickupMinutes: order.pickupMinutes,
-          deliveryType: order.deliveryType,
-          shippingAddr: order.shippingAddr,
-          phone: order.phone,
-          createdAt: order.createdAt,
-        })),
-      });
+    if (!telegramId) {
+      return reply.status(400).send({ error: 'telegramId is required' });
     }
-  );
 
-  // Get order by ID
+    const user = await app.prisma.user.findUnique({ where: { telegramId } });
+    if (!user) {
+      return reply.send({ orders: [] });
+    }
+
+    const orders = await prismaOrder.findMany({
+      where: { userId: user.id },
+      include: {
+        items: true,
+        location: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    });
+
+    return reply.send({
+      orders: orders.map((savedOrder: (typeof orders)[number]) => ({
+        id: savedOrder.id,
+        status: savedOrder.status,
+        totalPrice: String((savedOrder as any).totalPrice ?? (savedOrder as any).total ?? 0),
+        location: savedOrder.location.name,
+        items: savedOrder.items,
+        paymentMethod: savedOrder.paymentMethod,
+        pickupMinutes: (savedOrder as any).pickupMinutes ?? (savedOrder as any).pickupTime ?? 10,
+        deliveryType: (savedOrder as any).deliveryType ?? 'pickup',
+        shippingAddr: (savedOrder as any).shippingAddr ?? null,
+        phone: (savedOrder as any).phone ?? null,
+        createdAt: savedOrder.createdAt,
+      })),
+    });
+  });
+
   app.get<{ Params: { id: string } }>(':id', async (request, reply) => {
     const { id } = request.params;
 
-    const order = await app.prisma.order.findUnique({
+    const order = await prismaOrder.findUnique({
       where: { id },
       include: {
         items: true,
@@ -341,14 +388,14 @@ export async function orderRoutes(
       order: {
         id: order.id,
         status: order.status,
-        totalPrice: order.totalPrice.toString(),
+        totalPrice: String((order as any).totalPrice ?? (order as any).total ?? 0),
         location: order.location,
         items: order.items,
         paymentMethod: order.paymentMethod,
-        pickupMinutes: order.pickupMinutes,
-        deliveryType: order.deliveryType,
-        shippingAddr: order.shippingAddr,
-        phone: order.phone,
+        pickupMinutes: (order as any).pickupMinutes ?? (order as any).pickupTime ?? 10,
+        deliveryType: (order as any).deliveryType ?? 'pickup',
+        shippingAddr: (order as any).shippingAddr ?? null,
+        phone: (order as any).phone ?? null,
         createdAt: order.createdAt,
       },
     });
