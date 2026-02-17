@@ -43,6 +43,21 @@ export async function radioRoutes(
   _opts: FastifyPluginOptions,
 ): Promise<void> {
 
+
+  // ── GET /api/radio/tracks — local playlist for WebApp audio player ─────
+  app.get('/tracks', async (_request, reply) => {
+    try {
+      const tracks = await app.prisma.track.findMany({
+        orderBy: { createdAt: 'asc' },
+      });
+
+      return reply.send({ tracks });
+    } catch (error) {
+      app.log.error({ err: error }, 'Get tracks error');
+      return reply.status(500).send({ error: 'Failed to get tracks' });
+    }
+  });
+
   // ── GET /api/radio/playlist ─────────────────────────────────────────────
   app.get('/playlist', async (request, reply) => {
     try {
