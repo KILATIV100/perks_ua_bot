@@ -38,6 +38,27 @@ async function resolveUserId(
   return null;
 }
 
+
+function normalizeTrackUrl(rawUrl: string): string {
+  const base = (process.env.MUSIC_BASE_URL || 'https://perkup.com.ua/music').replace(/\/+$/, '');
+  const cleaned = rawUrl.trim();
+
+  if (!cleaned) return `${base}/track1.mp3`;
+
+  // Legacy placeholder from early seeds
+  if (cleaned.includes('your-domain.com.ua')) {
+    const fileName = cleaned.split('/').filter(Boolean).pop() || 'track1.mp3';
+    return `${base}/${fileName}`;
+  }
+
+  // Convert relative URLs to absolute music base
+  if (cleaned.startsWith('/')) {
+    return cleaned.replace(/^\/+(music\/)?/, `${base}/`);
+  }
+
+  return cleaned.replace('://', '§§').replace(/\/{2,}/g, '/').replace('§§', '://');
+}
+
 export async function radioRoutes(
   app: FastifyInstance,
   _opts: FastifyPluginOptions,
@@ -51,7 +72,30 @@ export async function radioRoutes(
         orderBy: { createdAt: 'asc' },
       });
 
-      return reply.send({ tracks });
+      if (tracks.length > 0) {
+        return reply.send({
+          tracks: tracks.map((track) => ({
+            ...track,
+            url: normalizeTrackUrl(track.url),
+          })),
+        });
+      }
+
+      const legacyTracks = await app.prisma.radioTrack.findMany({
+        where: { isActive: true },
+        orderBy: { sortOrder: 'asc' },
+      });
+
+      return reply.send({
+        tracks: legacyTracks.map((track) => ({
+          id: track.id,
+          title: track.title,
+          artist: track.artist,
+          url: normalizeTrackUrl(track.src),
+          coverUrl: null,
+          createdAt: track.createdAt,
+        })),
+      });
     } catch (error) {
       app.log.error({ err: error }, 'Get tracks error');
       return reply.status(500).send({ error: 'Failed to get tracks' });
