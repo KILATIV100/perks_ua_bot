@@ -132,3 +132,34 @@ export const seedProducts = [
   { name: 'Худі "PerkUp Original"', description: 'Стильне худі з логотипом PerkUp', volume: null, price: 1200, category: 'Мерч', type: 'MERCH' as ProductType, imageUrl: null },
   { name: 'Термочашка "Coffee Lover"', description: 'Термочашка з фірмовим дизайном', volume: '350 мл', price: 450, category: 'Мерч', type: 'MERCH' as ProductType, imageUrl: null },
 ];
+
+
+export interface TrackSeed {
+  title: string;
+  artist: string;
+  url: string;
+  coverUrl: string | null;
+}
+
+const musicBaseUrl = (process.env.MUSIC_BASE_URL || 'https://perkup.com.ua/music').replace(/\/+$/, '');
+
+export const seedTracks: TrackSeed[] = [
+  {
+    title: 'PerkUp Morning Brew',
+    artist: 'PerkUp Radio',
+    url: `${musicBaseUrl}/track1.mp3`, // Замініть домен/шлях під свій хостинг за потреби
+    coverUrl: null,
+  },
+  {
+    title: 'Latte Drive',
+    artist: 'PerkUp Radio',
+    url: `${musicBaseUrl}/track2.mp3`,
+    coverUrl: null,
+  },
+  {
+    title: 'Espresso Flow',
+    artist: 'PerkUp Radio',
+    url: `${musicBaseUrl}/track3.mp3`,
+    coverUrl: null,
+  },
+];

@@ -51,7 +51,25 @@ export async function radioRoutes(
         orderBy: { createdAt: 'asc' },
       });
 
-      return reply.send({ tracks });
+      if (tracks.length > 0) {
+        return reply.send({ tracks });
+      }
+
+      const legacyTracks = await app.prisma.radioTrack.findMany({
+        where: { isActive: true },
+        orderBy: { sortOrder: 'asc' },
+      });
+
+      return reply.send({
+        tracks: legacyTracks.map((track) => ({
+          id: track.id,
+          title: track.title,
+          artist: track.artist,
+          url: track.src,
+          coverUrl: null,
+          createdAt: track.createdAt,
+        })),
+      });
     } catch (error) {
       app.log.error({ err: error }, 'Get tracks error');
       return reply.status(500).send({ error: 'Failed to get tracks' });

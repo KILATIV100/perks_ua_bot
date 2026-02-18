@@ -42,6 +42,13 @@ const setRoleSchema = z.object({
   requesterId: z.union([z.number(), z.string()]).transform(String).optional(),
 });
 
+const addPointsSchema = z.object({
+  points: z.number().int().min(1).max(100000),
+  userId: z.string().min(3).optional(),
+  telegramId: z.union([z.number(), z.string()]).transform(String).optional(),
+  targetTelegramId: z.union([z.number(), z.string()]).transform(String).optional(),
+});
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 async function notifyChat(chatId: string, text: string, parseMode = 'HTML', replyMarkup?: object): Promise<void> {
@@ -398,33 +405,63 @@ export async function adminModuleRoutes(
   });
 
   // ────────────────────────────────────────────────────────────────────────
-  // POST /api/admin/add-points — God Mode (Owner only)
+  // POST /api/admin/add-points — Owner can add points (self or any user by ID)
   // ────────────────────────────────────────────────────────────────────────
-  app.post<{ Body: { telegramId?: string; points: number } }>('/add-points', async (request, reply) => {
+  app.post<{ Body: { telegramId?: string; userId?: string; points: number } }>('/add-points', async (request, reply) => {
     try {
       const admin = await resolveAdmin(request, app.prisma);
       if (!admin || admin.role !== 'OWNER') {
         return reply.status(403).send({ error: 'FORBIDDEN' });
       }
 
-      const { points } = request.body;
-      const targetTelegramId = request.body.telegramId || admin.telegramId;
+      const body = addPointsSchema.parse(request.body);
+      const targetTelegramId = body.telegramId || body.targetTelegramId;
 
-      // Only allow Owner to add points to themselves
-      if (targetTelegramId !== OWNER_TELEGRAM_ID && targetTelegramId !== admin.telegramId) {
-        return reply.status(403).send({ error: 'Only Owner can add points to themselves.' });
+      if (body.userId && targetTelegramId) {
+        return reply.status(400).send({ error: 'Specify only one target: userId or telegramId.' });
       }
 
-      const user = await app.prisma.user.upsert({
-        where: { telegramId: targetTelegramId },
-        update: { points: { increment: points } },
-        create: { telegramId: targetTelegramId, points, role: 'OWNER' },
-        select: { telegramId: true, firstName: true, points: true },
+      const ownerSelfUpdate = !body.userId && !targetTelegramId;
+
+      if (ownerSelfUpdate) {
+        const user = await app.prisma.user.update({
+          where: { id: admin.userId },
+          data: { points: { increment: body.points } },
+          select: { id: true, telegramId: true, firstName: true, points: true },
+        });
+
+        return reply.send({ success: true, added: body.points, user, mode: 'self', newBalance: user.points });
+      }
+
+      const target = body.userId
+        ? await app.prisma.user.findUnique({ where: { id: body.userId }, select: { id: true } })
+        : await app.prisma.user.findUnique({
+            where: { telegramId: targetTelegramId! },
+            select: { id: true },
+          });
+
+      if (!target) {
+        return reply.status(404).send({ error: 'USER_NOT_FOUND' });
+      }
+
+      const user = await app.prisma.user.update({
+        where: { id: target.id },
+        data: { points: { increment: body.points } },
+        select: { id: true, telegramId: true, firstName: true, points: true },
       });
 
-      return reply.send({ success: true, newBalance: user.points, added: points });
+      return reply.send({
+        success: true,
+        added: body.points,
+        user,
+        mode: body.userId ? 'userId' : 'telegramId',
+        newBalance: user.points,
+      });
     } catch (error) {
       app.log.error({ err: error }, 'Add points error');
+      if (error instanceof z.ZodError) {
+        return reply.status(400).send({ error: 'Invalid request data', details: error.errors });
+      }
       return reply.status(500).send({ error: 'Failed to add points' });
     }
   });

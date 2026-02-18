@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { seedLocations, seedProducts } from '../src/data/seedData.js';
+import { seedLocations, seedProducts, seedTracks } from '../src/data/seedData.js';
 
 const prisma = new PrismaClient();
 
@@ -26,28 +26,9 @@ async function main(): Promise<void> {
   await prisma.product.createMany({ data: seedProducts });
   console.log(`☕ Created ${seedProducts.length} products`);
 
-  // Seed local playlist tracks (replace domain with your production host)
+  // Seed local playlist tracks (set MUSIC_BASE_URL env if needed)
   await prisma.track.createMany({
-    data: [
-      {
-        title: 'PerkUp Morning Brew',
-        artist: 'PerkUp Radio',
-        url: 'https://your-domain.com.ua/music/track1.mp3', // TODO: replace with your real domain
-        coverUrl: null,
-      },
-      {
-        title: 'Latte Drive',
-        artist: 'PerkUp Radio',
-        url: 'https://your-domain.com.ua/music/track2.mp3', // TODO: replace with your real domain
-        coverUrl: null,
-      },
-      {
-        title: 'Espresso Flow',
-        artist: 'PerkUp Radio',
-        url: 'https://your-domain.com.ua/music/track3.mp3', // TODO: replace with your real domain
-        coverUrl: null,
-      },
-    ],
+    data: seedTracks,
     skipDuplicates: true,
   });
   console.log('🎵 Seeded demo tracks for /api/radio/tracks');
