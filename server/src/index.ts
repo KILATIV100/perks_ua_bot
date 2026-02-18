@@ -19,7 +19,7 @@ import rateLimit from '@fastify/rate-limit';
 import socketio from 'fastify-socket.io';
 import { PrismaClient } from '@prisma/client';
 import { redis } from './shared/redis.js';
-import { seedProducts, seedLocations } from './data/seedData.js';
+import { seedProducts, seedLocations, seedTracks } from './data/seedData.js';
 
 // ── Module routes ────────────────────────────────────────────────────────────
 import { authRoutes } from './modules/auth/auth.routes.js';
@@ -127,6 +127,15 @@ async function autoSeedProducts(): Promise<void> {
   }
 }
 
+
+async function autoSeedTracks(): Promise<void> {
+  const count = await prisma.track.count();
+  if (count === 0) {
+    console.log('[AutoSeed] Seeding radio tracks...');
+    await prisma.track.createMany({ data: seedTracks });
+  }
+}
+
 async function connectRedis(): Promise<void> {
   try {
     if (typeof redis.connect === 'function' && (redis as unknown as { status?: string }).status !== 'ready') {
@@ -157,6 +166,7 @@ async function start(): Promise<void> {
     ensureOwnerExists().catch((e) => app.log.error(e, '[startup] owner setup failed'));
     autoSeedLocations().catch((e) => app.log.error(e, '[startup] location seed failed'));
     autoSeedProducts().catch((e) => app.log.error(e, '[startup] product seed failed'));
+    autoSeedTracks().catch((e) => app.log.error(e, '[startup] tracks seed failed'));
   } catch (err) {
     app.log.error(err);
     process.exit(1);
