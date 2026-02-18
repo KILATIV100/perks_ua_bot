@@ -110,13 +110,54 @@ async function ensureOwnerExists(): Promise<void> {
 }
 
 async function autoSeedLocations(): Promise<void> {
-  const count = await prisma.location.count();
-  if (count === 0) {
-    console.log('[AutoSeed] Seeding locations...');
-    for (const loc of seedLocations) {
-      await prisma.location.create({ data: loc });
-    }
+  console.log('[AutoSeed] Syncing locations...');
+
+  const kronaLocation = seedLocations.find((location) => location.slug === 'zhk-krona-park-2');
+  if (!kronaLocation) {
+    throw new Error('Location seed "zhk-krona-park-2" is missing');
   }
+
+  await prisma.$transaction(async (tx) => {
+    const legacySlug = 'zhk-lisovyi-kvartal';
+    const legacyLocation = await tx.location.findUnique({ where: { slug: legacySlug } });
+    const kronaRecord = await tx.location.findUnique({ where: { slug: kronaLocation.slug } });
+
+    if (legacyLocation && !kronaRecord) {
+      await tx.location.update({
+        where: { slug: legacySlug },
+        data: {
+          slug: kronaLocation.slug,
+          name: kronaLocation.name,
+          address: kronaLocation.address,
+          latitude: kronaLocation.latitude,
+          longitude: kronaLocation.longitude,
+          hasOrdering: kronaLocation.hasOrdering,
+          isViewOnly: kronaLocation.isViewOnly,
+          isActive: kronaLocation.isActive,
+        },
+      });
+    }
+
+    if (legacyLocation && kronaRecord) {
+      await tx.location.delete({ where: { slug: legacySlug } });
+    }
+
+    for (const loc of seedLocations) {
+      await tx.location.upsert({
+        where: { slug: loc.slug },
+        update: {
+          name: loc.name,
+          address: loc.address,
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          hasOrdering: loc.hasOrdering,
+          isViewOnly: loc.isViewOnly,
+          isActive: loc.isActive,
+        },
+        create: loc,
+      });
+    }
+  });
 }
 
 async function autoSeedProducts(): Promise<void> {
