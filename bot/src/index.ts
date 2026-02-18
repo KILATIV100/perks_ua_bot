@@ -121,6 +121,9 @@ const waitingForCode = new Set<number>();
 // Store users waiting for broadcast message input
 const waitingForBroadcast = new Set<number>();
 
+// Store owners waiting for grant-points input (format: <telegramId> <points>)
+const waitingForGrantPoints = new Set<number>();
+
 // Random notification messages
 const PROXIMITY_MESSAGES = [
   "Відчуваєш цей аромат? ☕️ Ти всього в 5 хвилинах від ідеального капучино. Заходь!",
@@ -253,32 +256,31 @@ async function getAllUsersForBroadcast(requesterId: number): Promise<AllUsersRes
 }
 
 /**
- * Add points to Owner (God Mode)
+ * Add points (Owner): to self or target telegramId
  */
-async function addPointsToOwner(telegramId: number, points: number): Promise<AddPointsResponse | null> {
+async function addPoints(requesterTelegramId: number, points: number, targetTelegramId?: number): Promise<AddPointsResponse | null> {
   try {
-    console.log(`[API] Adding ${points} points to ${telegramId}...`);
-    console.log(`[API] URL: ${API_URL}/api/admin/add-points`);
+    const payload: Record<string, unknown> = { telegramId: String(requesterTelegramId), points };
+    if (targetTelegramId) {
+      payload.targetTelegramId = String(targetTelegramId);
+    }
 
     const response = await fetch(`${API_URL}/api/admin/add-points`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ telegramId: String(telegramId), points }),
+      body: JSON.stringify(payload),
     });
 
-    console.log(`[API] Response status: ${response.status}`);
-
     if (response.ok) {
-      const data = (await response.json()) as AddPointsResponse;
-      console.log(`[API] Success:`, data);
-      return data;
-    } else {
-      const errorText = await response.text();
-      console.error(`[API] Error response: ${errorText}`);
+      return (await response.json()) as AddPointsResponse;
     }
+
+    const errorText = await response.text();
+    console.error(`[API] Add points error: ${errorText}`);
   } catch (error) {
     console.error('[API] Failed to add points:', error);
   }
+
   return null;
 }
 
@@ -404,6 +406,7 @@ function getOwnerKeyboard(): Keyboard {
   return new Keyboard()
     .text('🔍 Перевірити код')
     .text('💰 +100 балів')
+    .text('🎯 Нарахувати іншому')
     .row()
     .text('📊 Статистика за 24г')
     .text('📣 Розсилка')
@@ -644,6 +647,7 @@ bot.on('message:text', async (ctx) => {
     waitingForCode.delete(userId);
     waitingForAdminId.delete(userId);
     waitingForBroadcast.delete(userId);
+    waitingForGrantPoints.delete(userId);
     await ctx.reply('🏠 Головне меню', { reply_markup: getOwnerKeyboard() });
     return;
   }
@@ -688,6 +692,7 @@ bot.on('message:text', async (ctx) => {
     waitingForCode.delete(userId);
     waitingForAdminId.delete(userId);
     waitingForBroadcast.delete(userId);
+    waitingForGrantPoints.delete(userId);
 
     const stats = await getStats(userId);
 
@@ -718,8 +723,9 @@ bot.on('message:text', async (ctx) => {
     waitingForCode.delete(userId);
     waitingForAdminId.delete(userId);
     waitingForBroadcast.delete(userId);
+    waitingForGrantPoints.delete(userId);
 
-    const result = await addPointsToOwner(userId, 100);
+    const result = await addPoints(userId, 100);
 
     if (result) {
       await ctx.reply(
@@ -734,11 +740,29 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
+  // Handle "Grant points to another user" button (Owner only)
+  if (text === '🎯 Нарахувати іншому' && isOwner) {
+    waitingForCode.delete(userId);
+    waitingForAdminId.delete(userId);
+    waitingForBroadcast.delete(userId);
+    waitingForGrantPoints.add(userId);
+
+    await ctx.reply(
+      '🎯 *Нарахування балів іншому користувачу*\n\n' +
+        'Введи у форматі: `telegramId сума`\n' +
+        'Приклад: `123456789 100`\n\n' +
+        'Натисни *⬅️ Скасувати* для виходу.',
+      { parse_mode: 'Markdown', reply_markup: getCodeVerificationKeyboard() }
+    );
+    return;
+  }
+
   // Handle "Broadcast" button (Owner only)
   if (text === '📣 Розсилка' && isOwner) {
     waitingForCode.delete(userId);
     waitingForAdminId.delete(userId);
     waitingForBroadcast.add(userId);
+    waitingForGrantPoints.delete(userId);
 
     await ctx.reply(
       '📣 *Розсилка повідомлень*\n\n' +
@@ -761,6 +785,12 @@ bot.on('message:text', async (ctx) => {
   }
 
   // Handle "Cancel" button during broadcast input
+  if (text === '⬅️ Скасувати' && waitingForGrantPoints.has(userId)) {
+    waitingForGrantPoints.delete(userId);
+    await ctx.reply('🏠 Нарахування скасовано.', { reply_markup: getOwnerKeyboard() });
+    return;
+  }
+
   if (text === '⬅️ Скасувати' && waitingForBroadcast.has(userId)) {
     waitingForBroadcast.delete(userId);
     await ctx.reply('🏠 Повернулися до головного меню.', { reply_markup: getOwnerKeyboard() });
@@ -788,6 +818,7 @@ bot.on('message:text', async (ctx) => {
   if (text === '👥 Керування адмінами' && isOwner) {
     waitingForCode.delete(userId);
     waitingForBroadcast.delete(userId);
+    waitingForGrantPoints.delete(userId);
     const admins = await getAdminList(userId);
 
     let message = '👥 *Керування адмінами*\n\n';
@@ -842,6 +873,48 @@ bot.on('message:text', async (ctx) => {
     } else {
       await ctx.reply('❌ Код недійсний/прострочений', { reply_markup: keyboard });
     }
+    return;
+  }
+
+  // Handle grant points input (Owner only)
+  if (waitingForGrantPoints.has(userId) && isOwner) {
+    const match = text.trim().match(/^(\d{5,})\s+(-?\d+)$/);
+    if (!match) {
+      await ctx.reply('❌ Формат невірний. Введи: `telegramId сума` (наприклад, `123456789 100`).', {
+        parse_mode: 'Markdown',
+        reply_markup: getCodeVerificationKeyboard(),
+      });
+      return;
+    }
+
+    const targetTelegramId = Number(match[1]);
+    const points = Number(match[2]);
+
+    if (!Number.isInteger(points) || points <= 0) {
+      await ctx.reply('❌ Сума має бути цілим числом більше 0.', { reply_markup: getCodeVerificationKeyboard() });
+      return;
+    }
+
+    const result = await addPoints(userId, points, targetTelegramId);
+    if (!result) {
+      await ctx.reply('❌ Не вдалося нарахувати бали. Перевір ID та спробуй ще раз.', {
+        reply_markup: getCodeVerificationKeyboard(),
+      });
+      return;
+    }
+
+    waitingForGrantPoints.delete(userId);
+    await ctx.reply(
+      `✅ *Бали нараховано!*
+
+` +
+        `👤 Користувач: \`${targetTelegramId}\`
+` +
+        `💰 Додано: *+${result.added}* балів
+` +
+        `🏦 Новий баланс користувача: *${result.newBalance}* балів`,
+      { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+    );
     return;
   }
 
