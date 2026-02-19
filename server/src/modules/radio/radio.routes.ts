@@ -43,9 +43,13 @@ async function resolveUser(
     return { userId: user.id, role: user.role };
   }
 
-  const telegramId =
+  const rawTelegramId =
     (request.query as Record<string, string>)?.telegramId ||
     (request.body as Record<string, string>)?.telegramId;
+
+  const telegramId = Array.isArray(rawTelegramId)
+    ? rawTelegramId[0]
+    : rawTelegramId;
 
   if (telegramId) {
     const user = await prisma.user.findUnique({

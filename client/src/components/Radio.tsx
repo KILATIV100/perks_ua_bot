@@ -161,7 +161,7 @@ export function Radio({ theme, apiUrl, telegramId, userRole }: RadioProps) {
   const deleteTrack = async (trackId: string) => {
     if (!telegramId) return;
     try {
-      const res = await fetch(endpoint(`/tracks/${trackId}?telegramId=${telegramId}`), {
+      const res = await fetch(endpoint(`/tracks/${trackId}`), {
         method: 'DELETE',
       });
       if (!res.ok) return;
