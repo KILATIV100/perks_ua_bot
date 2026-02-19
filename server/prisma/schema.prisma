@@ -244,12 +244,13 @@ model DailyGameLimit {
 }
 
 model Track {
-  id        String   @id @default(cuid())
-  title     String
-  artist    String
-  url       String
-  coverUrl  String?
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  title          String
+  artist         String
+  url            String
+  coverUrl       String?
+  telegramFileId String?
+  createdAt      DateTime @default(now())
 
   @@map("tracks")
 }

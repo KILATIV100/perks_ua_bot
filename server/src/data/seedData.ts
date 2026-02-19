@@ -141,61 +141,6 @@ export interface TrackSeed {
   coverUrl: string | null;
 }
 
-const musicBaseUrl = (process.env.MUSIC_BASE_URL || 'https://raw.githubusercontent.com/KILATIV100/music/main').replace(/\/+$/, '');
-
-export const seedTracks: TrackSeed[] = [
-  {
-    title: 'PerkUp Morning Brew',
-    artist: 'PerkUp Radio',
-    url: `${musicBaseUrl}/track1.mp3`,
-    coverUrl: null,
-  },
-  {
-    title: 'Latte Drive',
-    artist: 'PerkUp Radio',
-    url: `${musicBaseUrl}/track2.mp3`,
-    coverUrl: null,
-  },
-  {
-    title: 'Espresso Flow',
-    artist: 'PerkUp Radio',
-    url: `${musicBaseUrl}/track3.mp3`,
-    coverUrl: null,
-  },
-  {
-    title: 'Sunset Cortado',
-    artist: 'PerkUp Radio',
-    url: `${musicBaseUrl}/track4.mp3`,
-    coverUrl: null,
-  },
-  {
-    title: 'Cold Brew Chill',
-    artist: 'PerkUp Radio',
-    url: `${musicBaseUrl}/track5.mp3`,
-    coverUrl: null,
-  },
-  {
-    title: 'Mocha Groove',
-    artist: 'PerkUp Radio',
-    url: `${musicBaseUrl}/track6.mp3`,
-    coverUrl: null,
-  },
-  {
-    title: 'Vanilla Sky',
-    artist: 'PerkUp Radio',
-    url: `${musicBaseUrl}/track7.mp3`,
-    coverUrl: null,
-  },
-  {
-    title: 'Caramel Vibes',
-    artist: 'PerkUp Radio',
-    url: `${musicBaseUrl}/track8.mp3`,
-    coverUrl: null,
-  },
-  {
-    title: 'Midnight Roast',
-    artist: 'PerkUp Radio',
-    url: `${musicBaseUrl}/track9.mp3`,
-    coverUrl: null,
-  },
-];
+// Tracks are now added via bot (🎵 Додати трек → forward audio from TG channel).
+// Seed is empty — owner manages playlist through the bot.
+export const seedTracks: TrackSeed[] = [];

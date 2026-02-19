@@ -124,6 +124,9 @@ const waitingForBroadcast = new Set<number>();
 // Store owners waiting for grant-points input (format: <telegramId> <points>)
 const waitingForGrantPoints = new Set<number>();
 
+// Store owners waiting to send audio file for radio
+const waitingForRadioTrack = new Set<number>();
+
 // Random notification messages
 const PROXIMITY_MESSAGES = [
   "Відчуваєш цей аромат? ☕️ Ти всього в 5 хвилинах від ідеального капучино. Заходь!",
@@ -251,6 +254,31 @@ async function getAllUsersForBroadcast(requesterId: number): Promise<AllUsersRes
     }
   } catch (error) {
     console.error('[API] Failed to get all users:', error);
+  }
+  return null;
+}
+
+/**
+ * Add track to radio via API (Owner)
+ */
+async function addRadioTrack(
+  telegramId: number,
+  title: string,
+  artist: string,
+  telegramFileId: string,
+): Promise<{ success: boolean; track?: { id: string; title: string } } | null> {
+  try {
+    const response = await fetch(`${API_URL}/api/radio/tracks/add`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegramId: String(telegramId), title, artist, telegramFileId }),
+    });
+
+    if (response.ok) {
+      return (await response.json()) as { success: boolean; track: { id: string; title: string } };
+    }
+  } catch (error) {
+    console.error('[API] Failed to add radio track:', error);
   }
   return null;
 }
@@ -412,6 +440,7 @@ function getOwnerKeyboard(): Keyboard {
     .text('📣 Розсилка')
     .row()
     .text('👥 Керування адмінами')
+    .text('🎵 Додати трек')
     .resized();
 }
 
@@ -648,6 +677,7 @@ bot.on('message:text', async (ctx) => {
     waitingForAdminId.delete(userId);
     waitingForBroadcast.delete(userId);
     waitingForGrantPoints.delete(userId);
+    waitingForRadioTrack.delete(userId);
     await ctx.reply('🏠 Головне меню', { reply_markup: getOwnerKeyboard() });
     return;
   }
@@ -693,6 +723,7 @@ bot.on('message:text', async (ctx) => {
     waitingForAdminId.delete(userId);
     waitingForBroadcast.delete(userId);
     waitingForGrantPoints.delete(userId);
+    waitingForRadioTrack.delete(userId);
 
     const stats = await getStats(userId);
 
@@ -724,6 +755,7 @@ bot.on('message:text', async (ctx) => {
     waitingForAdminId.delete(userId);
     waitingForBroadcast.delete(userId);
     waitingForGrantPoints.delete(userId);
+    waitingForRadioTrack.delete(userId);
 
     const result = await addPoints(userId, 100);
 
@@ -757,6 +789,25 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
+  // Handle "Add Track" button (Owner only)
+  if (text === '🎵 Додати трек' && isOwner) {
+    waitingForCode.delete(userId);
+    waitingForAdminId.delete(userId);
+    waitingForBroadcast.delete(userId);
+    waitingForGrantPoints.delete(userId);
+    waitingForRadioTrack.delete(userId);
+    waitingForRadioTrack.add(userId);
+
+    await ctx.reply(
+      '🎵 *Додавання треку до PerkUp Radio*\n\n' +
+        'Надішли аудіофайл (MP3) або перешли аудіо з каналу.\n\n' +
+        'Назва та виконавець підтягнуться автоматично з метаданих файлу.\n\n' +
+        'Натисни *⬅️ Скасувати* для виходу.',
+      { parse_mode: 'Markdown', reply_markup: getCodeVerificationKeyboard() }
+    );
+    return;
+  }
+
   // Handle "Broadcast" button (Owner only)
   if (text === '📣 Розсилка' && isOwner) {
     waitingForCode.delete(userId);
@@ -784,10 +835,17 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
-  // Handle "Cancel" button during broadcast input
+  // Handle "Cancel" button during grant points
   if (text === '⬅️ Скасувати' && waitingForGrantPoints.has(userId)) {
     waitingForGrantPoints.delete(userId);
     await ctx.reply('🏠 Нарахування скасовано.', { reply_markup: getOwnerKeyboard() });
+    return;
+  }
+
+  // Handle "Cancel" button during radio track add
+  if (text === '⬅️ Скасувати' && waitingForRadioTrack.has(userId)) {
+    waitingForRadioTrack.delete(userId);
+    await ctx.reply('🏠 Додавання треку скасовано.', { reply_markup: getOwnerKeyboard() });
     return;
   }
 
@@ -819,6 +877,7 @@ bot.on('message:text', async (ctx) => {
     waitingForCode.delete(userId);
     waitingForBroadcast.delete(userId);
     waitingForGrantPoints.delete(userId);
+    waitingForRadioTrack.delete(userId);
     const admins = await getAdminList(userId);
 
     let message = '👥 *Керування адмінами*\n\n';
@@ -971,6 +1030,37 @@ bot.on('message:text', async (ctx) => {
       `📍 Або надішли свою геолокацію, щоб дізнатися відстань до найближчої кав'ярні.`,
     { parse_mode: 'Markdown', reply_markup: keyboard }
   );
+});
+
+// Handle audio messages (for radio track upload by Owner)
+bot.on('message:audio', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  // Only process if owner is waiting to add a track
+  if (!waitingForRadioTrack.has(userId)) return;
+
+  const audio = ctx.message.audio;
+  const fileId = audio.file_id;
+  const title = audio.title || audio.file_name?.replace(/\.\w+$/, '') || 'Без назви';
+  const artist = audio.performer || 'PerkUp Radio';
+
+  waitingForRadioTrack.delete(userId);
+
+  await ctx.reply('⏳ Додаю трек...');
+
+  const result = await addRadioTrack(userId, title, artist, fileId);
+
+  if (result?.success) {
+    await ctx.reply(
+      `✅ *Трек додано до PerkUp Radio!*\n\n` +
+        `🎵 *${title}*\n` +
+        `👤 ${artist}`,
+      { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+    );
+  } else {
+    await ctx.reply('❌ Не вдалося додати трек. Спробуй ще раз.', { reply_markup: getOwnerKeyboard() });
+  }
 });
 
 // Handle location messages
