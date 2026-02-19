@@ -206,6 +206,11 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
           </div>
         )}
 
+        {/* Auto-cancel notice */}
+        <div className="mb-4 p-3 rounded-xl text-center text-xs" style={{ backgroundColor: theme.secondaryBgColor, color: theme.hintColor }}>
+          ⚠️ Якщо бариста не підтвердить замовлення протягом 1 хв, воно буде автоматично скасоване.
+        </div>
+
         {/* Submit button */}
         <button
           onClick={handleSubmit}
