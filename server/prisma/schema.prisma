@@ -88,6 +88,7 @@ model User {
   sessionsAsPlayer2 GameSession[]    @relation("Player2")
   wonSessions       GameSession[]    @relation("Winner")
   radioLikes        RadioLike[]
+  favoriteTracks    FavoriteTrack[]
 
   @@index([telegramId])
   @@map("users")
@@ -244,15 +245,28 @@ model DailyGameLimit {
 }
 
 model Track {
-  id             String   @id @default(cuid())
+  id             String          @id @default(cuid())
   title          String
   artist         String
   url            String
   coverUrl       String?
   telegramFileId String?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime        @default(now())
+  favorites      FavoriteTrack[]
 
   @@map("tracks")
+}
+
+model FavoriteTrack {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  trackId   String
+  track     Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, trackId])
+  @@map("favorite_tracks")
 }
 
 model RadioTrack {
