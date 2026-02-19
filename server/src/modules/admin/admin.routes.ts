@@ -415,7 +415,9 @@ export async function adminModuleRoutes(
       }
 
       const body = addPointsSchema.parse(request.body);
-      const targetTelegramId = body.telegramId || body.targetTelegramId;
+      // body.telegramId is used by resolveAdmin() for legacy auth,
+      // so only body.targetTelegramId should be treated as the target user
+      const targetTelegramId = body.targetTelegramId;
 
       if (body.userId && targetTelegramId) {
         return reply.status(400).send({ error: 'Specify only one target: userId or telegramId.' });
