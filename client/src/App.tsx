@@ -370,7 +370,7 @@ function App() {
               </div>
             </div>
 
-            <Radio theme={theme} apiUrl={API_URL} />
+            <Radio theme={theme} apiUrl={API_URL} telegramId={telegramUser?.id} userRole={appUser?.role} />
 
             {isGameFullscreen && (
               <div className="fixed inset-0 z-50 flex flex-col" style={{ backgroundColor: theme.bgColor }}>

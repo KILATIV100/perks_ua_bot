@@ -132,3 +132,15 @@ export const seedProducts = [
   { name: 'Худі "PerkUp Original"', description: 'Стильне худі з логотипом PerkUp', volume: null, price: 1200, category: 'Мерч', type: 'MERCH' as ProductType, imageUrl: null },
   { name: 'Термочашка "Coffee Lover"', description: 'Термочашка з фірмовим дизайном', volume: '350 мл', price: 450, category: 'Мерч', type: 'MERCH' as ProductType, imageUrl: null },
 ];
+
+
+export interface TrackSeed {
+  title: string;
+  artist: string;
+  url: string;
+  coverUrl: string | null;
+}
+
+// Tracks are now added via bot (🎵 Додати трек → forward audio from TG channel).
+// Seed is empty — owner manages playlist through the bot.
+export const seedTracks: TrackSeed[] = [];
