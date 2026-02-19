@@ -40,7 +40,7 @@ async function resolveUserId(
 
 
 function normalizeTrackUrl(rawUrl: string): string {
-  const base = (process.env.MUSIC_BASE_URL || 'https://perkup.com.ua/music').replace(/\/+$/, '');
+  const base = (process.env.MUSIC_BASE_URL || 'https://raw.githubusercontent.com/KILATIV100/music/main').replace(/\/+$/, '');
   const cleaned = rawUrl.trim();
 
   if (!cleaned) return `${base}/track1.mp3`;
