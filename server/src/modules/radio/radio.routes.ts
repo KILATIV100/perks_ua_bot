@@ -1,13 +1,11 @@
 /**
  * Radio Module — HTTP Routes (v2.0)
  *
- * GET   /api/radio/tracks             — Playlist for WebApp audio player
- * GET   /api/radio/stream/:trackId    — Proxy-stream audio (Telegram file or direct URL)
- * GET   /api/radio/playlist           — Get playlist (sorted, with like counts)
- * GET   /api/radio/tracks/:id/likes   — Get like count + whether current user liked
- * POST  /api/radio/like               — Toggle like on a track
- * POST  /api/radio/tracks/add         — Add track from Telegram file_id (Owner only)
- * DELETE /api/radio/tracks/:id        — Delete a track (Owner only)
+ * GET    /api/radio/tracks             — Playlist with user context (favorites, role)
+ * GET    /api/radio/stream/:trackId    — Proxy-stream audio from Telegram
+ * POST   /api/radio/tracks/add         — Add track from Telegram file_id (Owner only)
+ * DELETE /api/radio/tracks/:id         — Delete a track (Owner/Admin only)
+ * POST   /api/radio/favorite           — Toggle favorite on a track
  */
 
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest } from 'fastify';
@@ -17,11 +15,6 @@ import { redis } from '../../shared/redis.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
-const likeSchema = z.object({
-  trackId: z.string(),
-  telegramId: z.union([z.number(), z.string()]).transform(String).optional(),
-});
-
 const addTrackSchema = z.object({
   title: z.string().min(1),
   artist: z.string().default('PerkUp Radio'),
@@ -30,31 +23,13 @@ const addTrackSchema = z.object({
   telegramId: z.union([z.number(), z.string()]).transform(String).optional(),
 });
 
-/** Resolve userId from JWT or legacy telegramId */
-async function resolveUserId(
-  request: FastifyRequest,
-  prisma: FastifyInstance['prisma'],
-): Promise<string | null> {
-  const jwtUser = (request as FastifyRequest & { user?: JwtPayload }).user;
-  if (jwtUser) return jwtUser.userId;
+const favoriteSchema = z.object({
+  trackId: z.string().min(1),
+  telegramId: z.union([z.number(), z.string()]).transform(String).optional(),
+});
 
-  const telegramId =
-    (request.query as Record<string, string>)?.telegramId ||
-    (request.body as Record<string, string>)?.telegramId;
-
-  if (telegramId) {
-    const user = await prisma.user.findUnique({
-      where: { telegramId: String(telegramId) },
-      select: { id: true },
-    });
-    return user?.id ?? null;
-  }
-
-  return null;
-}
-
-/** Resolve admin/owner from JWT or legacy telegramId */
-async function resolveAdmin(
+/** Resolve user from JWT or legacy telegramId */
+async function resolveUser(
   request: FastifyRequest,
   prisma: FastifyInstance['prisma'],
 ): Promise<{ userId: string; role: string } | null> {
@@ -117,11 +92,16 @@ export async function radioRoutes(
   _opts: FastifyPluginOptions,
 ): Promise<void> {
 
-  // ── GET /api/radio/tracks — playlist for WebApp audio player ───────────
+  // ── GET /api/radio/tracks — playlist with user context ─────────────────
   app.get('/tracks', async (request, reply) => {
     try {
+      const user = await resolveUser(request, app.prisma);
+
       const tracks = await app.prisma.track.findMany({
         orderBy: { createdAt: 'asc' },
+        include: {
+          _count: { select: { favorites: true } },
+        },
       });
 
       // Build stream URL base from the request
@@ -129,33 +109,28 @@ export async function radioRoutes(
       const host = request.headers['x-forwarded-host'] || request.headers.host || 'localhost';
       const streamBase = `${protocol}://${host}/api/radio/stream`;
 
-      if (tracks.length > 0) {
-        return reply.send({
-          tracks: tracks.map((track) => ({
-            id: track.id,
-            title: track.title,
-            artist: track.artist,
-            url: track.telegramFileId ? `${streamBase}/${track.id}` : track.url,
-            coverUrl: track.coverUrl,
-            createdAt: track.createdAt,
-          })),
+      // Get user's favorites if authenticated
+      let favoriteTrackIds = new Set<string>();
+      if (user) {
+        const favs = await app.prisma.favoriteTrack.findMany({
+          where: { userId: user.userId },
+          select: { trackId: true },
         });
+        favoriteTrackIds = new Set(favs.map(f => f.trackId));
       }
 
-      const legacyTracks = await app.prisma.radioTrack.findMany({
-        where: { isActive: true },
-        orderBy: { sortOrder: 'asc' },
-      });
-
       return reply.send({
-        tracks: legacyTracks.map((track) => ({
+        tracks: tracks.map((track) => ({
           id: track.id,
           title: track.title,
           artist: track.artist,
-          url: track.src,
-          coverUrl: null,
+          url: track.telegramFileId ? `${streamBase}/${track.id}` : track.url,
+          coverUrl: track.coverUrl,
           createdAt: track.createdAt,
+          isFavorite: favoriteTrackIds.has(track.id),
+          favoriteCount: track._count.favorites,
         })),
+        userRole: user?.role || null,
       });
     } catch (error) {
       app.log.error({ err: error }, 'Get tracks error');
@@ -174,7 +149,6 @@ export async function radioRoutes(
         return reply.status(404).send({ error: 'Track not found' });
       }
 
-      // If track has a Telegram file ID, proxy from Telegram
       if (track.telegramFileId) {
         const fileUrl = await getTelegramFileUrl(track.telegramFileId);
         if (!fileUrl) {
@@ -186,8 +160,9 @@ export async function radioRoutes(
           return reply.status(502).send({ error: 'Failed to fetch audio from Telegram' });
         }
 
-        reply.header('Content-Type', audioRes.headers.get('content-type') || 'audio/mpeg');
+        reply.header('Content-Type', 'audio/mpeg');
         reply.header('Accept-Ranges', 'none');
+        reply.header('Cache-Control', 'public, max-age=2400');
         const contentLength = audioRes.headers.get('content-length');
         if (contentLength) reply.header('Content-Length', contentLength);
 
@@ -202,11 +177,11 @@ export async function radioRoutes(
     }
   });
 
-  // ── POST /api/radio/tracks/add — Add track from Telegram file_id (Owner) ──
+  // ── POST /api/radio/tracks/add — Add track (Owner only) ───────────────
   app.post('/tracks/add', async (request, reply) => {
     try {
-      const admin = await resolveAdmin(request, app.prisma);
-      if (!admin || admin.role !== 'OWNER') {
+      const user = await resolveUser(request, app.prisma);
+      if (!user || user.role !== 'OWNER') {
         return reply.status(403).send({ error: 'FORBIDDEN' });
       }
 
@@ -232,11 +207,11 @@ export async function radioRoutes(
     }
   });
 
-  // ── DELETE /api/radio/tracks/:id — Delete track (Owner) ────────────────
+  // ── DELETE /api/radio/tracks/:id — Delete track (Owner/Admin) ──────────
   app.delete<{ Params: { id: string } }>('/tracks/:id', async (request, reply) => {
     try {
-      const admin = await resolveAdmin(request, app.prisma);
-      if (!admin || admin.role !== 'OWNER') {
+      const user = await resolveUser(request, app.prisma);
+      if (!user || (user.role !== 'OWNER' && user.role !== 'ADMIN')) {
         return reply.status(403).send({ error: 'FORBIDDEN' });
       }
 
@@ -248,108 +223,40 @@ export async function radioRoutes(
     }
   });
 
-  // ── GET /api/radio/playlist ─────────────────────────────────────────────
-  app.get('/playlist', async (request, reply) => {
+  // ── POST /api/radio/favorite — Toggle favorite ────────────────────────
+  app.post('/favorite', async (request, reply) => {
     try {
-      const userId = await resolveUserId(request, app.prisma);
+      const body = favoriteSchema.parse(request.body);
+      const user = await resolveUser(request, app.prisma);
 
-      const tracks = await app.prisma.radioTrack.findMany({
-        where: { isActive: true },
-        orderBy: { sortOrder: 'asc' },
-        include: {
-          _count: { select: { likes: true } },
-        },
-      });
-
-      // If user is authenticated, check which tracks they liked
-      let likedTrackIds = new Set<string>();
-      if (userId) {
-        const likes = await app.prisma.radioLike.findMany({
-          where: { userId },
-          select: { trackId: true },
-        });
-        likedTrackIds = new Set(likes.map(l => l.trackId));
-      }
-
-      const playlist = tracks.map(track => ({
-        id: track.id,
-        title: track.title,
-        artist: track.artist,
-        src: track.src,
-        duration: track.duration,
-        sortOrder: track.sortOrder,
-        likes: track._count.likes,
-        isLiked: likedTrackIds.has(track.id),
-      }));
-
-      return reply.send({ playlist });
-    } catch (error) {
-      app.log.error({ err: error }, 'Get playlist error');
-      return reply.status(500).send({ error: 'Failed to get playlist' });
-    }
-  });
-
-  // ── GET /api/radio/tracks/:id/likes ─────────────────────────────────────
-  app.get<{ Params: { id: string } }>('/tracks/:id/likes', async (request, reply) => {
-    try {
-      const trackId = request.params.id;
-      const userId = await resolveUserId(request, app.prisma);
-
-      const count = await app.prisma.radioLike.count({ where: { trackId } });
-
-      let isLiked = false;
-      if (userId) {
-        const like = await app.prisma.radioLike.findUnique({
-          where: { userId_trackId: { userId, trackId } },
-        });
-        isLiked = !!like;
-      }
-
-      return reply.send({ trackId, likes: count, isLiked });
-    } catch (error) {
-      app.log.error({ err: error }, 'Get track likes error');
-      return reply.status(500).send({ error: 'Failed to get likes' });
-    }
-  });
-
-  // ── POST /api/radio/like — Toggle like ──────────────────────────────────
-  app.post('/like', async (request, reply) => {
-    try {
-      const body = likeSchema.parse(request.body);
-      const userId = await resolveUserId(request, app.prisma);
-
-      if (!userId) {
+      if (!user) {
         return reply.status(401).send({ error: 'UNAUTHORIZED' });
       }
 
-      // Check track exists
-      const track = await app.prisma.radioTrack.findUnique({ where: { id: body.trackId } });
+      const track = await app.prisma.track.findUnique({ where: { id: body.trackId } });
       if (!track) {
         return reply.status(404).send({ error: 'Track not found' });
       }
 
-      // Toggle like
-      const existing = await app.prisma.radioLike.findUnique({
-        where: { userId_trackId: { userId, trackId: body.trackId } },
+      const existing = await app.prisma.favoriteTrack.findUnique({
+        where: { userId_trackId: { userId: user.userId, trackId: body.trackId } },
       });
 
       if (existing) {
-        await app.prisma.radioLike.delete({ where: { id: existing.id } });
-        const count = await app.prisma.radioLike.count({ where: { trackId: body.trackId } });
-        return reply.send({ liked: false, likes: count });
+        await app.prisma.favoriteTrack.delete({ where: { id: existing.id } });
+        return reply.send({ isFavorite: false });
       } else {
-        await app.prisma.radioLike.create({
-          data: { userId, trackId: body.trackId },
+        await app.prisma.favoriteTrack.create({
+          data: { userId: user.userId, trackId: body.trackId },
         });
-        const count = await app.prisma.radioLike.count({ where: { trackId: body.trackId } });
-        return reply.send({ liked: true, likes: count });
+        return reply.send({ isFavorite: true });
       }
     } catch (error) {
-      app.log.error({ err: error }, 'Toggle like error');
+      app.log.error({ err: error }, 'Toggle favorite error');
       if (error instanceof z.ZodError) {
         return reply.status(400).send({ error: 'Invalid request data', details: error.errors });
       }
-      return reply.status(500).send({ error: 'Failed to toggle like' });
+      return reply.status(500).send({ error: 'Failed to toggle favorite' });
     }
   });
 }
