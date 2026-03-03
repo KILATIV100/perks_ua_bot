@@ -52,43 +52,47 @@ enum GameStatus {
 // ── Models ───────────────────────────────────────────────────────────────────
 
 model User {
-  id                String    @id @default(cuid())
-  telegramId        String    @unique
-  firstName         String?
-  lastName          String?
-  username          String?
-  languageCode      String?   @default("uk")
+  id                       String            @id @default(cuid())
+  telegramId               String            @unique
+  firstName                String?
+  lastName                 String?
+  username                 String?
+  languageCode             String?           @default("uk")
 
-  role              Role      @default(USER)
-  points            Int       @default(0)
-  totalSpins        Int       @default(0)
+  role                     Role              @default(USER)
+  points                   Int               @default(0)
+  totalSpins               Int               @default(0)
   /// Date string in Kyiv timezone (YYYY-MM-DD). Resets spin at 00:00 Kyiv.
-  lastSpinDate      String?
+  lastSpinDate             String?
+  pushNotificationsEnabled Boolean           @default(true)
 
   // Referrals
-  referralCode      String    @unique @default(cuid())
-  referredById      String?
-  referredBy        User?     @relation("Referrals", fields: [referredById], references: [id])
-  referrals         User[]    @relation("Referrals")
-  referralBonusPaid Boolean   @default(false)
+  referralCode             String            @unique @default(cuid())
+  referredById             String?
+  referredBy               User?             @relation("Referrals", fields: [referredById], references: [id])
+  referrals                User[]            @relation("Referrals")
+  referralBonusPaid        Boolean           @default(false)
 
-  lastActiveAt      DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  lastActiveAt             DateTime?
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
 
   // Relations
-  orders            Order[]          @relation("UserOrders")
-  processedOrders   Order[]          @relation("ProcessedOrders")
-  redemptionCodes   RedemptionCode[] @relation("UserRedemptions")
-  confirmedCodes    RedemptionCode[] @relation("AdminConfirmations")
-  spinHistory       SpinHistory[]
-  gameScores        GameScore[]
-  dailyGameLimits   DailyGameLimit[]
-  sessionsAsPlayer1 GameSession[]    @relation("Player1")
-  sessionsAsPlayer2 GameSession[]    @relation("Player2")
-  wonSessions       GameSession[]    @relation("Winner")
-  radioLikes        RadioLike[]
-  favoriteTracks    FavoriteTrack[]
+  orders                   Order[]           @relation("UserOrders")
+  processedOrders          Order[]           @relation("ProcessedOrders")
+  redemptionCodes          RedemptionCode[]  @relation("UserRedemptions")
+  confirmedCodes           RedemptionCode[]  @relation("AdminConfirmations")
+  spinHistory              SpinHistory[]
+  gameScores               GameScore[]
+  dailyGameLimits          DailyGameLimit[]
+  sessionsAsPlayer1        GameSession[]     @relation("Player1")
+  sessionsAsPlayer2        GameSession[]     @relation("Player2")
+  wonSessions              GameSession[]     @relation("Winner")
+  radioLikes               RadioLike[]
+  favoriteTracks           FavoriteTrack[]
+  dnaProfile               DnaProfile?
+  secretBeverages          SecretBeverage[]
+  npsSurveys               NpsSurvey[]
 
   @@index([telegramId])
   @@map("users")
@@ -149,6 +153,7 @@ model Order {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   items          OrderItem[]
+  npsSurveys     NpsSurvey[]
 
   @@map("orders")
 }
@@ -165,6 +170,51 @@ model OrderItem {
   options   Json?
 
   @@map("order_items")
+}
+
+model DnaProfile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roastPreference String
+  milkPreference  String
+  sweetnessLevel  Int
+  favoriteSyrups  String[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("dna_profiles")
+}
+
+model SecretBeverage {
+  id                 String   @id @default(cuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name               String
+  description        String
+  isUnlocked         Boolean  @default(false)
+  discountPercentage Int
+  unlockedAt         DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([userId])
+  @@map("secret_beverages")
+}
+
+model NpsSurvey {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId   String?
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  rating    Int
+  feedback  String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([orderId])
+  @@map("nps_surveys")
 }
 
 model SpinHistory {
