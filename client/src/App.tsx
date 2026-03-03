@@ -1,11 +1,11 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import axios from 'axios';
-import WebApp from '@twa-dev/sdk';
 import { WheelOfFortune } from './components/WheelOfFortune';
 import { Menu, CartItem } from './components/Menu';
 import { Radio } from './components/Radio';
 import { TicTacToe } from './components/TicTacToe';
 import { Checkout } from './components/Checkout';
+import { useTelegram } from './hooks/useTelegram';
 
 type TabType = 'locations' | 'menu' | 'shop' | 'games' | 'bonuses';
 
@@ -72,6 +72,8 @@ function App() {
   const [isGameFullscreen, setIsGameFullscreen] = useState(false);
   const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
+  const { webApp, user: twaUser } = useTelegram();
+
   const [redeemState, setRedeemState] = useState<{
     loading: boolean;
     code: string | null;
@@ -80,7 +82,7 @@ function App() {
   }>({ loading: false, code: null, expiresAt: null, error: null });
 
   const theme = useMemo(() => {
-    const params = WebApp.themeParams;
+    const params = webApp.themeParams || {};
     return {
       bgColor: params.bg_color || '#ffffff',
       textColor: params.text_color || '#000000',
@@ -89,10 +91,10 @@ function App() {
       buttonTextColor: params.button_text_color || '#ffffff',
       secondaryBgColor: params.secondary_bg_color || '#f5f5f5',
     };
-  }, []);
+  }, [webApp]);
 
   const telegramUser = useMemo(() => {
-    const user = WebApp.initDataUnsafe?.user;
+    const user = twaUser;
     if (user) return { id: user.id, firstName: user.first_name, username: user.username };
     const params = new URLSearchParams(window.location.search);
     const id = params.get('telegramId');
@@ -104,9 +106,9 @@ function App() {
       };
     }
     return null;
-  }, []);
+  }, [twaUser]);
 
-  const startParam = useMemo(() => WebApp.initDataUnsafe?.start_param, []);
+  const startParam = useMemo(() => webApp.initDataUnsafe?.start_param, [webApp]);
   const referralId = useMemo(() => {
     if (startParam?.startsWith('ref_')) {
       return startParam.replace('ref_', '');
@@ -115,20 +117,22 @@ function App() {
   }, [startParam]);
 
   useEffect(() => {
-    WebApp.ready();
-    WebApp.expand();
+    webApp.ready();
+    webApp.expand();
+    webApp.setHeaderColor('bg_color');
+    webApp.setBackgroundColor('bg_color');
     if (!telegramUser) {
       setLoading(false);
     }
     syncUser();
     fetchLocations();
-  }, [telegramUser]);
+  }, [telegramUser, webApp]);
 
   const syncUser = async () => {
     if (!telegramUser) return;
     try {
       // Try JWT auth via Telegram initData first
-      const initData = WebApp.initData;
+      const initData = webApp.initData;
       if (initData) {
         try {
           const { data } = await axios.post(`${API_URL}/api/auth/telegram`, {
