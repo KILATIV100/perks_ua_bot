@@ -1,4 +1,5 @@
-import { Bot, InlineKeyboard, Keyboard } from 'grammy';
+import { createServer, type Server as HttpServer } from 'node:http';
+import { Bot, InlineKeyboard, Keyboard, webhookCallback } from 'grammy';
 
 // API Response Types
 interface UserRoleResponse {
@@ -83,6 +84,9 @@ interface OrderStatusUpdateResponse {
 // Environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const API_URL = process.env.API_URL || 'https://backend-production-5ee9.up.railway.app';
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
+const WEBHOOK_PATH = process.env.WEBHOOK_PATH || `/telegram/webhook/${BOT_TOKEN}`;
+const PORT = Number(process.env.PORT) || 3001;
 
 // WebApp URL - perkup.com.ua
 const WEB_APP_URL = 'https://perkup.com.ua';
@@ -1230,43 +1234,69 @@ bot.catch((err) => {
 });
 
 // Graceful shutdown
-process.once('SIGINT', () => { console.log('🛑 SIGINT received, stopping...'); bot.stop(); });
-process.once('SIGTERM', () => { console.log('🛑 SIGTERM received, stopping...'); bot.stop(); });
+let webhookServer: HttpServer | null = null;
 
-// Start bot with retry logic for 409 conflicts during Railway deployments
+async function stopBot(signal: string): Promise<void> {
+  console.log(`🛑 ${signal} received, stopping...`);
+
+  if (webhookServer) {
+    await new Promise<void>((resolve, reject) => {
+      webhookServer?.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  await bot.stop();
+}
+
+process.once('SIGINT', () => { void stopBot('SIGINT'); });
+process.once('SIGTERM', () => { void stopBot('SIGTERM'); });
+
 async function startBot() {
   console.log('🤖 Starting PerkUp bot...');
 
-  const MAX_RETRIES = 5;
-  const INITIAL_DELAY = 3000; // 3s
+  if (process.env.NODE_ENV === 'production' && WEBHOOK_DOMAIN) {
+    const webhookDomain = WEBHOOK_DOMAIN.replace(/\/$/, '');
+    const webhookUrl = `${webhookDomain}${WEBHOOK_PATH}`;
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const delay = INITIAL_DELAY * attempt; // 3s, 6s, 9s, 12s, 15s
-    console.log(`[Boot] Attempt ${attempt}/${MAX_RETRIES}: waiting ${delay / 1000}s for old instance to stop...`);
-    await new Promise(r => setTimeout(r, delay));
+    await bot.api.setWebhook(webhookUrl, { drop_pending_updates: true });
+    console.log(`[Boot] Webhook set: ${webhookUrl}`);
 
-    try {
-      // Delete any existing webhook/getUpdates session before starting
-      await bot.api.deleteWebhook({ drop_pending_updates: true });
-      console.log('[Boot] Webhook cleared, starting polling...');
-
-      await bot.start({
-        onStart: (botInfo) => {
-          console.log(`✅ Bot @${botInfo.username} is running!`);
-        },
-        drop_pending_updates: true,
-      });
-      return; // started successfully
-    } catch (err: unknown) {
-      const is409 = err instanceof Error && err.message.includes('409');
-      if (is409 && attempt < MAX_RETRIES) {
-        console.log(`[Boot] Got 409 conflict, old instance still running. Retrying...`);
-        continue;
+    const callback = webhookCallback(bot, 'http');
+    webhookServer = createServer((req, res) => {
+      if (req.url === WEBHOOK_PATH) {
+        void callback(req, res);
+        return;
       }
-      console.error(`[Boot] Failed to start bot after ${attempt} attempts:`, err);
-      throw err;
-    }
+
+      res.statusCode = 200;
+      res.end('ok');
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      webhookServer?.listen(PORT, '0.0.0.0', () => resolve());
+      webhookServer?.once('error', reject);
+    });
+
+    const me = await bot.api.getMe();
+    console.log(`✅ Bot @${me.username} is running in webhook mode on port ${PORT}`);
+    return;
   }
+
+  await bot.api.deleteWebhook({ drop_pending_updates: true });
+  console.log('[Boot] Webhook cleared, starting long polling...');
+
+  await bot.start({
+    onStart: (botInfo) => {
+      console.log(`✅ Bot @${botInfo.username} is running in polling mode`);
+    },
+    drop_pending_updates: true,
+  });
 }
 
 startBot();
