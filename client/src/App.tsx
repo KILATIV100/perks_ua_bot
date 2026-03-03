@@ -87,12 +87,12 @@ function App() {
   const theme = useMemo(() => {
     const params = webApp.themeParams || {};
     return {
-      bgColor: params.bg_color || '#ffffff',
-      textColor: params.text_color || '#000000',
-      hintColor: params.hint_color || '#999999',
-      buttonColor: params.button_color || '#8B5A2B',
-      buttonTextColor: params.button_text_color || '#ffffff',
-      secondaryBgColor: params.secondary_bg_color || '#f5f5f5',
+      bgColor: params.bg_color || '#1a0a00',
+      textColor: params.text_color || '#FFF8F0',
+      hintColor: params.hint_color || 'rgba(255, 248, 240, 0.6)',
+      buttonColor: params.button_color || '#F4A623',
+      buttonTextColor: params.button_text_color || '#1a0a00',
+      secondaryBgColor: params.secondary_bg_color || '#2d1812',
     };
   }, [webApp]);
 
@@ -276,25 +276,30 @@ function App() {
     }
   }, [telegramUser]);
 
-  if (loading) return <div className="p-20 text-center">Завантаження...</div>;
+  if (loading) return <div className="p-20 text-center text-[#FFF8F0] bg-[#1a0a00] min-h-screen">Завантаження...</div>;
 
   return (
-    <div className="min-h-screen pb-20" style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}>
-      <header className="p-4 sticky top-0 z-10 shadow-sm" style={{ backgroundColor: theme.bgColor }}>
+    <div className="min-h-screen pb-24 bg-[#1a0a00] text-[#FFF8F0] relative overflow-hidden" style={{ color: theme.textColor }}>
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-0 left-1/4 w-80 h-80 bg-[#F4A623]/10 rounded-full blur-3xl" />
+        <div className="absolute bottom-10 right-0 w-72 h-72 bg-[#00D4AA]/10 rounded-full blur-3xl" />
+      </div>
+
+      <header className="p-4 sticky top-0 z-10 border-b border-[#F4A623]/20 backdrop-blur-xl bg-[#1a0a00]/80">
         <div className="flex justify-between items-center">
-          <h1 className="text-xl font-bold">PerkUp</h1>
+          <h1 className="text-2xl font-bold tracking-wide text-[#F4A623]">PerkUP</h1>
           <div className="text-right">
             <p className="text-xs" style={{ color: theme.hintColor }}>Мій баланс</p>
-            <p className="font-bold text-[#FFB300]">{appUser?.points || 0} балів</p>
+            <p className="font-bold text-[#F4A623]">{appUser?.points || 0} балів</p>
           </div>
         </div>
       </header>
 
-      <main className="p-4">
+      <main className="p-4 relative z-10">
         {activeTab === 'locations' && (
           <div className="grid gap-4">
             {locations.map(loc => (
-              <div key={loc.id} className="p-4 rounded-2xl shadow-sm" style={{ backgroundColor: theme.bgColor }} onClick={() => { setSelectedLocation(loc); setActiveTab('menu'); }}>
+              <div key={loc.id} className="p-4 rounded-2xl shadow-sm border border-[#F4A623]/20 bg-[#3E2723]/60" onClick={() => { setSelectedLocation(loc); setActiveTab('menu'); }}>
                 <h3 className="font-bold">{loc.name}</h3>
                 <p className="text-sm" style={{ color: theme.hintColor }}>{loc.address}</p>
               </div>
@@ -511,7 +516,7 @@ function App() {
         </div>
       )}
 
-      <nav className="fixed bottom-0 left-0 right-0 border-t flex justify-around p-2 z-20" style={{ backgroundColor: theme.bgColor }}>
+      <nav className="fixed bottom-0 left-0 right-0 border-t border-[#F4A623]/20 flex justify-around p-2 z-20 backdrop-blur-xl bg-[#1a0a00]/85">
         {[
           { id: 'locations', icon: '📍', label: 'Точки' },
           { id: 'menu', icon: '☕', label: 'Меню' },
@@ -522,7 +527,7 @@ function App() {
         ].map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id as TabType)} className="flex flex-col items-center p-1">
             <span className="text-xl">{t.icon}</span>
-            <span className="text-[10px]" style={{ color: activeTab === t.id ? theme.buttonColor : theme.hintColor }}>{t.label}</span>
+            <span className="text-[10px]" style={{ color: activeTab === t.id ? '#F4A623' : theme.hintColor }}>{t.label}</span>
           </button>
         ))}
       </nav>
