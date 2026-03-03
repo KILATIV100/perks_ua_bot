@@ -5,9 +5,12 @@ import { Menu, CartItem } from './components/Menu';
 import { Radio } from './components/Radio';
 import { TicTacToe } from './components/TicTacToe';
 import { Checkout } from './components/Checkout';
+import { LiveFeed } from './components/LiveFeed';
+import { CoffeeDna } from './components/CoffeeDna';
+import { SecretDrink } from './components/SecretDrink';
 import { useTelegram } from './hooks/useTelegram';
 
-type TabType = 'locations' | 'menu' | 'shop' | 'games' | 'bonuses';
+type TabType = 'locations' | 'menu' | 'shop' | 'live' | 'games' | 'bonuses';
 
 const resolveApiUrl = () => {
   const params = new URLSearchParams(window.location.search);
@@ -349,6 +352,14 @@ function App() {
           </>
         )}
 
+        {activeTab === 'live' && (
+          <div className="space-y-4">
+            <SecretDrink apiUrl={API_URL} theme={theme} />
+            <LiveFeed apiUrl={API_URL} theme={theme} />
+            <CoffeeDna apiUrl={API_URL} telegramId={telegramUser?.id} theme={theme} />
+          </div>
+        )}
+
         {activeTab === 'games' && (
           <div className="space-y-6">
             <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
@@ -505,6 +516,7 @@ function App() {
           { id: 'locations', icon: '📍', label: 'Точки' },
           { id: 'menu', icon: '☕', label: 'Меню' },
           { id: 'shop', icon: '🛒', label: 'Shop' },
+          { id: 'live', icon: '📡', label: 'Live' },
           { id: 'games', icon: '🎮', label: 'Fun Zone' },
           { id: 'bonuses', icon: '🎁', label: 'Бонуси' }
         ].map(t => (

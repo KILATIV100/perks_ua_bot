@@ -2,15 +2,24 @@
  * Server Entry Point — PerkUp v2.0 Modular Monolith
  *
  * Module layout:
- *   modules/auth/       — Telegram initData validation + JWT tokens
- *   modules/loyalty/    — Wheel of Fortune, points, redemption codes
- *   modules/orders/     — Cart, orders, state machine
- *   modules/games/      — TIC_TAC_TOE (online + AI), PERKY_JUMP
- *   modules/products/   — Menu, categories
- *   modules/admin/      — Admin panel API, code verification, stats
- *   modules/referral/   — Referral links & stats
- *   modules/radio/      — Playlist, likes
- *   shared/             — PrismaClient, Redis, JWT, timezone utils, Telegram utils
+ *   modules/auth/           — Telegram initData validation + JWT tokens
+ *   modules/loyalty/        — Wheel of Fortune, points, redemption codes
+ *   modules/orders/         — Cart, orders, state machine
+ *   modules/games/          — TIC_TAC_TOE (online + AI), PERKY_JUMP, COFFEE_RUNNER
+ *   modules/products/       — Menu, categories
+ *   modules/admin/          — Admin panel API, code verification, stats
+ *   modules/referral/       — Referral links & stats
+ *   modules/radio/          — Playlist, likes, voting
+ *   modules/poster/         — Poster POS API integration, webhooks, menu sync
+ *   modules/battles/        — Coffee battles between users + location battles
+ *   modules/subscriptions/  — Morning subscription "Ранок за розкладом"
+ *   modules/points-log/     — Points audit trail
+ *   modules/challenges/     — AI-powered daily challenges
+ *   modules/live-feed/      — Real-time order activity stream (WebSocket)
+ *   modules/secret-drink/   — Secret drink of the day
+ *   modules/weather/        — Weather-based drink recommendations
+ *   modules/horoscope/      — AI-generated coffee horoscope
+ *   shared/                 — PrismaClient, Redis, JWT, timezone utils, Telegram utils
  */
 
 import Fastify from 'fastify';
@@ -31,6 +40,15 @@ import { orderRoutes as orderModuleRoutes } from './modules/orders/orders.routes
 import { adminModuleRoutes } from './modules/admin/admin.routes.js';
 import { referralRoutes } from './modules/referral/referral.routes.js';
 import { radioRoutes } from './modules/radio/radio.routes.js';
+import { posterRoutes } from './modules/poster/poster.routes.js';
+import { battleRoutes } from './modules/battles/battles.routes.js';
+import { subscriptionRoutes } from './modules/subscriptions/subscriptions.routes.js';
+import { pointsLogRoutes } from './modules/points-log/points-log.routes.js';
+import { challengeRoutes } from './modules/challenges/challenges.routes.js';
+import { liveFeedRoutes } from './modules/live-feed/live-feed.routes.js';
+import { secretDrinkRoutes } from './modules/secret-drink/secret-drink.routes.js';
+import { weatherRoutes } from './modules/weather/weather.routes.js';
+import { horoscopeRoutes } from './modules/horoscope/horoscope.routes.js';
 
 // ── Legacy routes (kept during migration) ────────────────────────────────────
 import { orderRoutes as legacyOrderRoutes } from './routes/orders.js';
@@ -89,6 +107,15 @@ app.register(orderModuleRoutes, { prefix: '/api/orders' });
 app.register(adminModuleRoutes, { prefix: '/api/admin' });
 app.register(referralRoutes, { prefix: '/api/referral' });
 app.register(radioRoutes, { prefix: '/api/radio' });
+app.register(posterRoutes, { prefix: '/api/poster' });
+app.register(battleRoutes, { prefix: '/api/battles' });
+app.register(subscriptionRoutes, { prefix: '/api/subscriptions' });
+app.register(pointsLogRoutes, { prefix: '/api/points-log' });
+app.register(challengeRoutes, { prefix: '/api/challenges' });
+app.register(liveFeedRoutes, { prefix: '/api/live-feed' });
+app.register(secretDrinkRoutes, { prefix: '/api/secret-drink' });
+app.register(weatherRoutes, { prefix: '/api/weather' });
+app.register(horoscopeRoutes, { prefix: '/api/horoscope' });
 
 // ── Legacy routes (backward compat — remove once all clients migrated) ───────
 app.register(legacyUserRoutes, { prefix: '/api/user' });

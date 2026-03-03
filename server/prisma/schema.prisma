@@ -11,6 +11,7 @@ datasource db {
 
 enum Role {
   USER
+  BARISTA
   ADMIN
   OWNER
 }
@@ -30,16 +31,31 @@ enum OrderStatus {
   COMPLETED
   REJECTED
   EXPIRED
+  CANCELLED
+}
+
+enum OrderType {
+  POS
+  BOT
+  SUBSCRIPTION
+}
+
+enum DeliveryType {
+  PICKUP
+  DELIVERY
 }
 
 enum PaymentMethod {
   CASH
   CARD
+  LIQPAY
+  MONOBANK
 }
 
 enum GameType {
   TIC_TAC_TOE
   PERKY_JUMP
+  COFFEE_RUNNER
 }
 
 enum GameStatus {
@@ -47,6 +63,26 @@ enum GameStatus {
   PLAYING
   FINISHED
   ABANDONED
+}
+
+enum BattleStatus {
+  PENDING
+  ACTIVE
+  FINISHED
+  CANCELLED
+}
+
+enum PointsLogType {
+  PURCHASE
+  SPIN
+  REFERRAL
+  CHALLENGE
+  BATTLE
+  BONUS
+  SPENT
+  SUBSCRIPTION
+  SECRET_DRINK
+  GAME
 }
 
 // ── Models ───────────────────────────────────────────────────────────────────
@@ -57,14 +93,26 @@ model User {
   firstName                String?
   lastName                 String?
   username                 String?
+  phone                    String?           @db.VarChar(20)
   languageCode             String?           @default("uk")
 
   role                     Role              @default(USER)
   points                   Int               @default(0)
+  level                    Int               @default(1)
   totalSpins               Int               @default(0)
   /// Date string in Kyiv timezone (YYYY-MM-DD). Resets spin at 00:00 Kyiv.
   lastSpinDate             String?
   pushNotificationsEnabled Boolean           @default(true)
+
+  // Coffee DNA / Archetype
+  archetype                String?           @db.VarChar(50)
+
+  // Poster POS integration
+  posterClientId           Int?
+
+  // Preferred location
+  preferredLocationId      String?
+  preferredLocation        Location?         @relation("PreferredLocation", fields: [preferredLocationId], references: [id])
 
   // Referrals
   referralCode             String            @unique @default(cuid())
@@ -93,8 +141,25 @@ model User {
   dnaProfile               DnaProfile?
   secretBeverages          SecretBeverage[]
   npsSurveys               NpsSurvey[]
+  pointsLog                PointsLog[]
+  adminLogs                AdminLog[]        @relation("AdminActions")
+
+  // Battles
+  challengedBattles        Battle[]          @relation("Challenger")
+  opponentBattles          Battle[]          @relation("Opponent")
+  wonBattles               Battle[]          @relation("BattleWinner")
+
+  // Subscriptions
+  subscriptions            Subscription[]
+
+  // Radio votes
+  radioVotes               RadioVote[]
+
+  // Challenges
+  dailyChallenges          DailyChallenge[]
 
   @@index([telegramId])
+  @@index([posterClientId])
   @@map("users")
 }
 
@@ -108,9 +173,16 @@ model Location {
   hasOrdering Boolean  @default(false)
   isViewOnly  Boolean  @default(false)
   isActive    Boolean  @default(true)
+  /// Poster spot_id for this location
+  posterSpotId Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   orders      Order[]
+
+  preferredByUsers User[]                @relation("PreferredLocation")
+  subscriptions    Subscription[]
+  weeklyBattles    LocationBattleWeekly[]
+  secretDrinks     SecretDrink[]
 
   @@map("locations")
 }
@@ -126,35 +198,45 @@ model Product {
   imageUrl    String?
   inStock     Boolean     @default(true)
   isActive    Boolean     @default(true)
+  /// Poster product_id for sync
+  posterProductId Int?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
   orderItems  OrderItem[]
 
+  @@index([posterProductId])
   @@map("products")
 }
 
 model Order {
-  id             String        @id @default(cuid())
-  orderNumber    Int           @default(autoincrement())
-  userId         String
-  user           User          @relation("UserOrders", fields: [userId], references: [id])
-  locationId     String
-  location       Location      @relation(fields: [locationId], references: [id])
-  status         OrderStatus   @default(DRAFT)
-  subtotal       Int           @default(0)
-  total          Int           @default(0)
-  pickupTime     Int?          // хвилини
-  comment        String?       @db.VarChar(500)
-  paymentMethod  PaymentMethod @default(CASH)
-  processedById  String?
-  processedBy    User?         @relation("ProcessedOrders", fields: [processedById], references: [id])
-  processedAt    DateTime?
-  estimatedReady DateTime?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  items          OrderItem[]
-  npsSurveys     NpsSurvey[]
+  id                   String        @id @default(cuid())
+  orderNumber          Int           @default(autoincrement())
+  userId               String
+  user                 User          @relation("UserOrders", fields: [userId], references: [id])
+  locationId           String
+  location             Location      @relation(fields: [locationId], references: [id])
+  /// Poster transaction ID (from webhook)
+  posterTransactionId  Int?          @unique
+  status               OrderStatus   @default(DRAFT)
+  type                 OrderType     @default(BOT)
+  deliveryType         DeliveryType  @default(PICKUP)
+  subtotal             Int           @default(0)
+  total                Int           @default(0)
+  pointsEarned         Int           @default(0)
+  pointsSpent          Int           @default(0)
+  pickupTime           Int?          // хвилини
+  comment              String?       @db.VarChar(500)
+  paymentMethod        PaymentMethod @default(CASH)
+  processedById        String?
+  processedBy          User?         @relation("ProcessedOrders", fields: [processedById], references: [id])
+  processedAt          DateTime?
+  estimatedReady       DateTime?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  items                OrderItem[]
+  npsSurveys           NpsSurvey[]
 
+  @@index([posterTransactionId])
   @@map("orders")
 }
 
@@ -180,6 +262,20 @@ model DnaProfile {
   milkPreference  String
   sweetnessLevel  Int
   favoriteSyrups  String[]
+  /// Top drink category percentage (e.g. "americano:68")
+  topDrink        String?
+  /// Time preference (morning, afternoon, evening)
+  timePreference  String?
+  /// Sugar preference percentage
+  sugarFree       Int?
+  /// Location preference
+  topLocation     String?
+  /// Generated archetype name
+  archetype       String?
+  /// Generated archetype description
+  archetypeDesc   String?
+  /// Percentage of users with this archetype
+  archetypeRarity Int?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -303,6 +399,7 @@ model Track {
   telegramFileId String?
   createdAt      DateTime        @default(now())
   favorites      FavoriteTrack[]
+  radioVotes     RadioVote[]
 
   @@map("tracks")
 }
@@ -343,4 +440,174 @@ model RadioLike {
 
   @@unique([userId, trackId])
   @@map("radio_likes")
+}
+
+// ── New models per ТЗ v2.0 ──────────────────────────────────────────────────
+
+/// Кавові батли між юзерами
+model Battle {
+  id               String       @id @default(cuid())
+  challengerId     String
+  challenger       User         @relation("Challenger", fields: [challengerId], references: [id])
+  opponentId       String
+  opponent         User         @relation("Opponent", fields: [opponentId], references: [id])
+  betPoints        Int
+  /// Category of drinks to track (e.g. "cappuccino", "any")
+  category         String       @db.VarChar(50)
+  description      String?
+  status           BattleStatus @default(PENDING)
+  challengerScore  Int          @default(0)
+  opponentScore    Int          @default(0)
+  winnerId         String?
+  winner           User?        @relation("BattleWinner", fields: [winnerId], references: [id])
+  endsAt           DateTime
+  createdAt        DateTime     @default(now())
+
+  @@index([challengerId])
+  @@index([opponentId])
+  @@index([status])
+  @@map("battles")
+}
+
+/// Ранкові підписки "Ранок за розкладом"
+model Subscription {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id])
+  /// Poster product ID
+  productPosterId  Int?
+  productName      String   @db.VarChar(100)
+  locationId       String
+  location         Location @relation(fields: [locationId], references: [id])
+  /// Час готовності (HH:MM)
+  scheduleTime     String   @db.VarChar(5)
+  /// Дні тижня (1=Пн...7=Нд), stored as JSON array
+  daysOfWeek       Int[]
+  pausedUntil      DateTime?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId])
+  @@map("subscriptions")
+}
+
+/// Аудит всіх транзакцій балів
+model PointsLog {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id])
+  amount       Int          // + або -
+  type         PointsLogType
+  /// Reference to source entity (order, battle, etc.)
+  sourceId     String?
+  description  String?
+  balanceAfter Int
+  createdAt    DateTime     @default(now())
+
+  @@index([userId])
+  @@index([type])
+  @@map("points_log")
+}
+
+/// Аудит адмін-дій
+model AdminLog {
+  id        String   @id @default(cuid())
+  adminId   String
+  admin     User     @relation("AdminActions", fields: [adminId], references: [id])
+  action    String   @db.VarChar(100)
+  targetId  String?
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([adminId])
+  @@map("admin_log")
+}
+
+/// Тижневий рейтинг батлу локацій
+model LocationBattleWeekly {
+  id           String   @id @default(cuid())
+  locationId   String
+  location     Location @relation(fields: [locationId], references: [id])
+  /// ISO week number (e.g. 2026-W12)
+  weekKey      String   @db.VarChar(10)
+  totalPoints  Int      @default(0)
+  totalOrders  Int      @default(0)
+  isWinner     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([locationId, weekKey])
+  @@index([weekKey])
+  @@map("location_battle_weekly")
+}
+
+/// Секретний напій дня
+model SecretDrink {
+  id              String   @id @default(cuid())
+  locationId      String?
+  location        Location? @relation(fields: [locationId], references: [id])
+  productName     String
+  originalPrice   Int      // kopiyky
+  discountPrice   Int      // kopiyky
+  discountPercent Int      @default(30)
+  maxQuantity     Int      @default(15)
+  claimedCount    Int      @default(0)
+  availableUntil  DateTime
+  date            String   // "YYYY-MM-DD"
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  @@index([date])
+  @@map("secret_drinks")
+}
+
+/// Голосування за треки в радіо
+model RadioVote {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  trackId   String
+  track     Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  /// If user spent points to boost
+  isPriority Boolean @default(false)
+  pointsSpent Int    @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([trackId])
+  @@map("radio_votes")
+}
+
+/// Розсилки з статистикою
+model Broadcast {
+  id          String   @id @default(cuid())
+  adminId     String
+  message     String
+  totalSent   Int      @default(0)
+  totalFailed Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@map("broadcasts")
+}
+
+/// Персональний AI-виклик дня
+model DailyChallenge {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  description String
+  /// Target product or category
+  target      String?
+  /// Reward multiplier (e.g. 2 for double points)
+  rewardMultiplier Int @default(2)
+  bonusPoints Int      @default(0)
+  isCompleted Boolean  @default(false)
+  completedAt DateTime?
+  expiresAt   DateTime
+  date        String   // "YYYY-MM-DD"
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@map("daily_challenges")
 }
