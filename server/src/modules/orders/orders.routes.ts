@@ -16,7 +16,7 @@ import { sendTelegramMessage } from '../../shared/utils/telegram.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
-const AUTO_CANCEL_DELAY_MS = 3 * 60 * 1000;
+const AUTO_CANCEL_DELAY_MS = 1 * 60 * 1000;
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -134,7 +134,7 @@ export async function orderRoutes(
         );
 
         await notifyAdminsAboutOrder(
-          `❌ <b>Замовлення #${cancelledOrder.orderNumber} автоматично скасовано</b> (минуло 3 хв)`,
+          `❌ <b>Замовлення #${cancelledOrder.orderNumber} автоматично скасовано</b> (минуло 1 хв)`,
         );
       } catch (error) {
         app.log.error({ err: error, orderId }, 'Order auto-cancel failed');
@@ -208,7 +208,7 @@ export async function orderRoutes(
             const adminMsg = `🆕 <b>НОВЕ ЗАМОВЛЕННЯ #${order.orderNumber}</b>\n\n👤 ${userName}\n📍 ${order.location.name}\n💰 <b>${totalPrice} грн</b>\n\n📋 <b>Склад:</b>\n${itemsList}`;
             await notifyAdminsAboutOrder(adminMsg, [[{ text: '✅ Прийняти в роботу', callback_data: `order_accept:${order.id}` }]]);
 
-            sendTelegramMessage(Number(u.telegramId), `✅ *Замовлення #${order.orderNumber} створено!*\n\n📍 ${order.location.name}\n⏱ Очікуйте ~${pickupTime} хв`).catch(() => {});
+            sendTelegramMessage(Number(u.telegramId), `✅ *Замовлення #${order.orderNumber} створено!*\n\n📍 ${order.location.name}\n⏱ Очікуйте ~${pickupTime} хв\n\n⚠️ Якщо бариста не підтвердить замовлення протягом 1 хв, воно буде автоматично скасоване.`).catch(() => {});
 
             scheduleAutoCancel(order.id);
 
@@ -262,7 +262,7 @@ export async function orderRoutes(
       await notifyAdminsAboutOrder(adminMsg, [[{ text: '✅ Прийняти', callback_data: `order_accept:${order.id}` }]]);
 
       if (userTelegramId) {
-        sendTelegramMessage(Number(userTelegramId), `✅ *Замовлення #${order.orderNumber} створено!*\n\n📍 ${order.location.name}\n⏱ Очікуйте ~${parsed.pickupTime} хв`).catch(() => {});
+        sendTelegramMessage(Number(userTelegramId), `✅ *Замовлення #${order.orderNumber} створено!*\n\n📍 ${order.location.name}\n⏱ Очікуйте ~${parsed.pickupTime} хв\n\n⚠️ Якщо бариста не підтвердить замовлення протягом 1 хв, воно буде автоматично скасоване.`).catch(() => {});
       }
 
       scheduleAutoCancel(order.id);
