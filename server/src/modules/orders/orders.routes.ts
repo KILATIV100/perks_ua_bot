@@ -46,6 +46,7 @@ const legacyCreateOrderSchema = z.object({
   deliveryType: z.string().default('pickup'),
   shippingAddr: z.string().optional(),
   phone: z.string().optional(),
+  comment: z.string().max(500).optional(),
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -142,6 +143,26 @@ export async function orderRoutes(
     }, AUTO_CANCEL_DELAY_MS);
   };
 
+
+  const needsClarification = (itemNames: string[], comment?: string): boolean => {
+    const normalized = (comment || '').toLowerCase();
+    const hasPlantMilk = itemNames.some((name) => name.toLowerCase().includes('рослинне молоко'));
+    const hasSyrup = itemNames.some((name) => name.toLowerCase().includes('сироп'));
+
+    if (hasPlantMilk) {
+      const milkHints = ['вівся', 'кокос', 'мигдал', 'соє', 'безлактоз'];
+      const hasMilkDetails = milkHints.some((hint) => normalized.includes(hint));
+      if (!hasMilkDetails) return true;
+    }
+
+    if (hasSyrup) {
+      const hasSyrupDetails = normalized.includes('сироп') && normalized.length > 12;
+      if (!hasSyrupDetails) return true;
+    }
+
+    return false;
+  };
+
   // POST /api/orders
   app.post('/', async (request, reply) => {
     try {
@@ -173,7 +194,7 @@ export async function orderRoutes(
             userId = u.id;
             userTelegramId = u.telegramId;
 
-            const { locationId, items, paymentMethod, pickupMinutes } = legacyParsed.data;
+            const { locationId, items, paymentMethod, pickupMinutes, comment } = legacyParsed.data;
             const pickupTime = pickupMinutes ?? 10;
             const location = await app.prisma.location.findUnique({ where: { id: locationId } });
             if (!location) return reply.status(404).send({ error: 'Location not found' });
@@ -190,6 +211,7 @@ export async function orderRoutes(
                 pickupTime,
                 paymentMethod: paymentMethod === 'cash' ? 'CASH' : 'CARD',
                 estimatedReady: new Date(Date.now() + pickupTime * 60 * 1000),
+                comment: comment || undefined,
                 items: {
                   create: items.map(i => ({
                     product: { connect: { id: i.productId } },
@@ -204,10 +226,9 @@ export async function orderRoutes(
 
             const itemsList = items.map(i => `  • ${i.name} x${i.quantity} — ${i.price * i.quantity} грн`).join('\n');
             const userName = u.firstName || u.username || `ID: ${u.telegramId}`;
-
-            const adminMsg = `🆕 <b>НОВЕ ЗАМОВЛЕННЯ #${order.orderNumber}</b>\n\n👤 ${userName}\n📍 ${order.location.name}\n💰 <b>${totalPrice} грн</b>\n\n📋 <b>Склад:</b>\n${itemsList}`;
-            await notifyAdminsAboutOrder(adminMsg, [[{ text: '✅ Прийняти в роботу', callback_data: `order_accept:${order.id}` }]]);
-
+            const clarificationNeeded = needsClarification(items.map(i => i.name), comment);
+            const adminMsg = `🆕 <b>НОВЕ ЗАМОВЛЕННЯ #${order.orderNumber}</b>\n\n👤 ${userName}\n📍 ${order.location.name}\n💰 <b>${totalPrice} грн</b>\n\n📋 <b>Склад:</b>\n${itemsList}\n\n💬 ${comment || '—'}${clarificationNeeded ? '\n\n❗️ Потрібно уточнення по рослинному молоку/сиропу' : ''}`;
+            await notifyAdminsAboutOrder(adminMsg, [[{ text: '✅ Прийняти в роботу', callback_data: `order_accept:${order.id}` }, { text: '❓ Уточнити', callback_data: `order_clarify:${order.id}` }]]);
             sendTelegramMessage(Number(u.telegramId), `✅ *Замовлення #${order.orderNumber} створено!*\n\n📍 ${order.location.name}\n⏱ Очікуйте ~${pickupTime} хв\n\n⚠️ Якщо бариста не підтвердить замовлення протягом 1 хв, воно буде автоматично скасоване.`).catch(() => {});
 
             scheduleAutoCancel(order.id);
@@ -257,10 +278,11 @@ export async function orderRoutes(
         include: { items: { include: { product: { select: { name: true } } } }, location: true },
       });
 
+      const itemNames = order.items.map(i => i.product.name);
       const itemsList = order.items.map(i => `• ${i.product.name} x${i.quantity}`).join('\n');
-      const adminMsg = `🆕 <b>НОВЕ ЗАМОВЛЕННЯ #${order.orderNumber}</b>\n\n👤 ${user?.firstName || ''} (@${user?.username || '—'})\n📍 ${order.location.name}\n⏱ ${parsed.pickupTime} хв\n💳 ${parsed.paymentMethod}\n\n📋 <b>Склад:</b>\n${itemsList}\n\n💬 ${parsed.comment || '—'}`;
-      await notifyAdminsAboutOrder(adminMsg, [[{ text: '✅ Прийняти', callback_data: `order_accept:${order.id}` }]]);
-
+      const clarificationNeeded = needsClarification(itemNames, parsed.comment);
+      const adminMsg = `🆕 <b>НОВЕ ЗАМОВЛЕННЯ #${order.orderNumber}</b>\n\n👤 ${user?.firstName || ''} (@${user?.username || '—'})\n📍 ${order.location.name}\n⏱ ${parsed.pickupTime} хв\n💳 ${parsed.paymentMethod}\n\n📋 <b>Склад:</b>\n${itemsList}\n\n💬 ${parsed.comment || '—'}${clarificationNeeded ? '\n\n❗️ Потрібно уточнення по рослинному молоку/сиропу' : ''}`;
+      await notifyAdminsAboutOrder(adminMsg, [[{ text: '✅ Прийняти', callback_data: `order_accept:${order.id}` }, { text: '❓ Уточнити', callback_data: `order_clarify:${order.id}` }]]);
       if (userTelegramId) {
         sendTelegramMessage(Number(userTelegramId), `✅ *Замовлення #${order.orderNumber} створено!*\n\n📍 ${order.location.name}\n⏱ Очікуйте ~${parsed.pickupTime} хв\n\n⚠️ Якщо бариста не підтвердить замовлення протягом 1 хв, воно буде автоматично скасоване.`).catch(() => {});
       }
@@ -306,7 +328,7 @@ export async function orderRoutes(
   app.get<{ Params: { id: string } }>('/:id', async (request, reply) => {
     const order = await app.prisma.order.findUnique({
       where: { id: request.params.id },
-      include: { items: { include: { product: true } }, location: true },
+      include: { items: { include: { product: true } }, location: true, user: { select: { telegramId: true } } },
     });
     if (!order) return reply.status(404).send({ error: 'ORDER_NOT_FOUND' });
     return reply.send({ order });

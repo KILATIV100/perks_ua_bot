@@ -110,6 +110,20 @@ export const seedProducts = [
   { name: 'Бебічіно', description: null, volume: '250 мл', price: 90, category: 'Не кава', type: 'MENU' as ProductType, imageUrl: null },
   { name: 'Бебічіно', description: null, volume: '350 мл', price: 130, category: 'Не кава', type: 'MENU' as ProductType, imageUrl: null },
 
+
+  // ===== Добавки (MENU) =====
+  { name: 'Аерозольні вершки', description: null, volume: null, price: 40, category: 'Добавки', type: 'MENU' as ProductType, imageUrl: null },
+  { name: 'Безлактозне молоко', description: null, volume: null, price: 15, category: 'Добавки', type: 'MENU' as ProductType, imageUrl: null },
+  { name: 'Вершки', description: null, volume: '30 мл', price: 10, category: 'Добавки', type: 'MENU' as ProductType, imageUrl: null },
+  { name: 'Кава без кофеїну', description: null, volume: null, price: 15, category: 'Добавки', type: 'MENU' as ProductType, imageUrl: null },
+  { name: 'Кульки Бабл ті', description: null, volume: null, price: 50, category: 'Добавки', type: 'MENU' as ProductType, imageUrl: null },
+  { name: 'Лимон', description: null, volume: null, price: 10, category: 'Добавки', type: 'MENU' as ProductType, imageUrl: null },
+  { name: 'Маршмелоу', description: null, volume: null, price: 25, category: 'Добавки', type: 'MENU' as ProductType, imageUrl: null },
+  { name: 'Рослинне молоко', description: null, volume: '180/250 мл', price: 30, category: 'Добавки', type: 'MENU' as ProductType, imageUrl: null },
+  { name: 'Рослинне молоко', description: null, volume: '350 мл', price: 40, category: 'Добавки', type: 'MENU' as ProductType, imageUrl: null },
+  { name: 'Рослинне молоко', description: null, volume: '450 мл', price: 50, category: 'Добавки', type: 'MENU' as ProductType, imageUrl: null },
+  { name: 'Сироп', description: null, volume: null, price: 10, category: 'Добавки', type: 'MENU' as ProductType, imageUrl: null },
+
   // ===== Солодощі та Їжа (MENU) =====
   { name: 'Хот-дог', description: null, volume: null, price: 70, category: 'Їжа', type: 'MENU' as ProductType, imageUrl: null },
   { name: 'Бургер', description: null, volume: null, price: 70, category: 'Їжа', type: 'MENU' as ProductType, imageUrl: null },

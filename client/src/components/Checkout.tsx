@@ -30,6 +30,7 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
   const [shippingAddress, setShippingAddress] = useState('');
   const [shippingPhone, setShippingPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [comment, setComment] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const total = cart.reduce((sum, item) => sum + parseFloat(item.product.price) * item.quantity, 0);
@@ -58,6 +59,7 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
         deliveryType: isShippingOrder ? 'shipping' : 'pickup',
         shippingAddr: isShippingOrder ? shippingAddress.trim() : undefined,
         phone: isShippingOrder ? shippingPhone.trim() : undefined,
+        comment: comment.trim() || undefined,
         items: cart.map((item) => ({
           productId: item.product.id,
           name: item.product.name,
@@ -90,6 +92,7 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
     pickupMinutes,
     shippingAddress,
     shippingPhone,
+    comment,
     submitting,
     telegramId,
     tgHaptic,
@@ -200,6 +203,22 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
             />
           </div>
         )}
+
+        <div className="mb-4">
+          <p className="text-xs mb-2 font-medium" style={{ color: theme.hintColor }}>Коментар до замовлення</p>
+          <textarea
+            value={comment}
+            onChange={(event) => setComment(event.target.value)}
+            placeholder="Наприклад: рослинне молоко — вівсяне, сироп — ваніль"
+            className="w-full rounded-xl px-3 py-2 text-sm min-h-[88px] resize-none"
+            style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
+            maxLength={500}
+          />
+          <p className="mt-1 text-[11px]" style={{ color: theme.hintColor }}>
+            {comment.length}/500
+          </p>
+        </div>
+
 
         <div className="mb-6">
           <p className="text-xs mb-2 font-medium" style={{ color: theme.hintColor }}>Спосіб оплати</p>
