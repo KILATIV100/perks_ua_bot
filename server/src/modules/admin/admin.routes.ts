@@ -22,6 +22,7 @@ import { z } from 'zod';
 import { requireAuth, requireAdmin, requireOwner, type JwtPayload } from '../../shared/jwt.js';
 import { sendTelegramMessage } from '../../shared/utils/telegram.js';
 import { redis } from '../../shared/redis.js';
+import { PosterService } from '../poster/poster.service.js';
 
 const OWNER_TELEGRAM_ID = process.env.OWNER_TELEGRAM_ID || '7363233852';
 const OWNER_CHAT_ID = process.env.OWNER_CHAT_ID || OWNER_TELEGRAM_ID;
@@ -232,6 +233,26 @@ export async function adminModuleRoutes(
     } catch (error) {
       app.log.error({ err: error }, 'Admin orders error');
       return reply.status(500).send({ error: 'Failed to get orders' });
+    }
+  });
+
+
+  // ────────────────────────────────────────────────────────────────────────
+  // POST /api/admin/sync-menu — sync categories/products from Poster
+  // ────────────────────────────────────────────────────────────────────────
+  app.post('/sync-menu', async (request, reply) => {
+    try {
+      const admin = await resolveAdmin(request, app.prisma);
+      if (!admin || (admin.role !== 'ADMIN' && admin.role !== 'OWNER')) {
+        return reply.status(403).send({ error: 'FORBIDDEN' });
+      }
+
+      const posterService = new PosterService(app.prisma);
+      const result = await posterService.syncMenu();
+      return reply.send({ success: true, ...result });
+    } catch (error) {
+      app.log.error({ err: error }, 'Admin sync menu error');
+      return reply.status(500).send({ error: 'SYNC_MENU_FAILED' });
     }
   });
 

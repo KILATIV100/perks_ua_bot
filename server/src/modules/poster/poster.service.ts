@@ -1,11 +1,5 @@
 /**
  * Poster POS Integration Service
- *
- * Handles:
- * - Menu synchronization from Poster API
- * - Webhook processing for transaction.create / product.update
- * - Auto-points calculation on closed checks
- * - Analytics aggregation from Poster data
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -13,13 +7,28 @@ import { PrismaClient } from '@prisma/client';
 const POSTER_API_URL = 'https://joinposter.com/api';
 const POSTER_ACCESS_TOKEN = process.env.POSTER_ACCESS_TOKEN || '';
 
-interface PosterProduct {
-  product_id: number;
-  product_name: string;
+type PosterPriceMap = Record<string, string | number>;
+
+interface PosterCategory {
+  category_id: number | string;
   category_name: string;
-  price: Record<string, string>;
+  hidden?: string | number;
+}
+
+interface PosterProduct {
+  product_id: number | string;
+  product_name: string;
+  category_name?: string;
+  menu_category_id?: number | string;
+  price: PosterPriceMap | string | number;
   photo?: string;
-  hidden?: string;
+  hidden?: string | number;
+}
+
+
+interface PosterIncomingOrderResponse {
+  incoming_order_id?: number | string;
+  order_id?: number | string;
 }
 
 interface PosterTransaction {
@@ -33,73 +42,243 @@ interface PosterTransaction {
     num: number;
     price: number;
   }>;
-  date_close?: string;
+}
+
+function toNumber(value: string | number | undefined | null): number | null {
+  if (value === undefined || value === null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Poster can send price as kopiyky integer, decimal hryvnia string, or stringified integer.
+ * Keep DB format as integer kopiyky.
+ */
+function normalizePosterPriceToKopiyky(price: PosterProduct['price']): number {
+  const candidateValues: Array<string | number> =
+    typeof price === 'object' && price !== null ? Object.values(price) : [price];
+
+  const first = candidateValues.find((v) => v !== undefined && v !== null && String(v).trim() !== '');
+  if (first === undefined) return 0;
+
+  const raw = String(first).replace(',', '.').trim();
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 0;
+
+  if (raw.includes('.')) {
+    return Math.round(parsed * 100);
+  }
+
+  // Heuristic:
+  // - values >= 1000 are usually already kopiyky (e.g. 5500)
+  // - small integers are likely hryvnia (e.g. 55)
+  if (parsed >= 1000) return Math.round(parsed);
+  return Math.round(parsed * 100);
 }
 
 export class PosterService {
   constructor(private prisma: PrismaClient) {}
 
-  /**
-   * Fetch products from Poster API and sync to our DB
-   */
-  async syncMenu(): Promise<{ synced: number; errors: number }> {
-    if (!POSTER_ACCESS_TOKEN) {
-      console.warn('[Poster] No access token configured, skipping sync');
-      return { synced: 0, errors: 0 };
-    }
+  private buildUrl(method: string, params: Record<string, string> = {}): string {
+    const query = new URLSearchParams({ token: POSTER_ACCESS_TOKEN, ...params });
+    return `${POSTER_API_URL}/${method}?${query.toString()}`;
+  }
 
-    let synced = 0;
-    let errors = 0;
+  async getCategories(): Promise<PosterCategory[]> {
+    if (!POSTER_ACCESS_TOKEN) return [];
+    const response = await fetch(this.buildUrl('menu.getCategories'));
+    const data = (await response.json()) as { response?: PosterCategory[] };
+    return data.response || [];
+  }
 
-    try {
-      const response = await fetch(
-        `${POSTER_API_URL}/menu.getProducts?token=${POSTER_ACCESS_TOKEN}`
-      );
-      const data = await response.json() as { response?: PosterProduct[] };
+  async getProducts(): Promise<PosterProduct[]> {
+    if (!POSTER_ACCESS_TOKEN) return [];
+    const response = await fetch(this.buildUrl('menu.getProducts'));
+    const data = (await response.json()) as { response?: PosterProduct[] };
+    return data.response || [];
+  }
 
-      if (!data.response) return { synced: 0, errors: 0 };
 
-      for (const product of data.response) {
-        try {
-          const priceInKopiyky = Math.round(
-            parseFloat(Object.values(product.price)[0] || '0') * 100
-          );
+  async getProduct(productId: number): Promise<PosterProduct | null> {
+    if (!POSTER_ACCESS_TOKEN) return null;
+    const response = await fetch(this.buildUrl('menu.getProduct', { product_id: String(productId) }));
+    const data = (await response.json()) as { response?: PosterProduct | PosterProduct[] };
+    const payload = data.response;
+    if (!payload) return null;
+    return Array.isArray(payload) ? (payload[0] || null) : payload;
+  }
 
-          await this.prisma.product.upsert({
-            where: { posterProductId: product.product_id },
-            update: {
-              name: product.product_name,
-              category: product.category_name || 'Інше',
-              price: priceInKopiyky,
-              imageUrl: product.photo || null,
-              isActive: product.hidden !== '1',
-            },
-            create: {
-              posterProductId: product.product_id,
-              name: product.product_name,
-              category: product.category_name || 'Інше',
-              price: priceInKopiyky,
-              imageUrl: product.photo || null,
-              isActive: product.hidden !== '1',
-            },
-          });
-          synced++;
-        } catch (err) {
-          errors++;
-          console.error(`[Poster] Failed to sync product ${product.product_id}:`, err);
-        }
-      }
-    } catch (err) {
-      console.error('[Poster] Menu sync failed:', err);
-    }
+  async syncProductByPosterId(productId: number): Promise<boolean> {
+    const product = await this.getProduct(productId);
+    if (!product) return false;
 
-    return { synced, errors };
+    const categories = await this.getCategories();
+    const normalizedPrice = normalizePosterPriceToKopiyky(product.price);
+    const categoryNameFromId = (() => {
+      const catId = toNumber(product.menu_category_id);
+      if (catId === null) return null;
+      const found = categories.find((c) => toNumber(c.category_id) === catId);
+      return found?.category_name || null;
+    })();
+    const categoryName = product.category_name || categoryNameFromId || 'Інше';
+
+    await this.prisma.product.upsert({
+      where: { posterId: productId },
+      update: {
+        posterId: productId,
+        posterProductId: productId,
+        name: product.product_name,
+        category: categoryName,
+        price: normalizedPrice,
+        imageUrl: product.photo || null,
+        isActive: String(product.hidden ?? '0') !== '1',
+      },
+      create: {
+        posterId: productId,
+        posterProductId: productId,
+        name: product.product_name,
+        category: categoryName,
+        price: normalizedPrice,
+        imageUrl: product.photo || null,
+        isActive: String(product.hidden ?? '0') !== '1',
+      },
+    });
+
+    return true;
+  }
+
+  async softDeleteProductByPosterId(productId: number): Promise<boolean> {
+    const existing = await this.prisma.product.findFirst({
+      where: { OR: [{ posterId: productId }, { posterProductId: productId }] },
+      select: { id: true },
+    });
+
+    if (!existing) return false;
+
+    await this.prisma.product.update({
+      where: { id: existing.id },
+      data: { isActive: false },
+    });
+
+    return true;
   }
 
   /**
-   * Process a Poster webhook for transaction.create
-   * Finds the user by poster_client_id or phone, awards points
+   * Sync categories + products from Poster into Prisma.
+   * Keeps product_id from Poster in DB as `posterId` (critical for cart flow).
    */
+  async syncMenu(): Promise<{ categoriesSynced: number; productsSynced: number; errors: number }> {
+    if (!POSTER_ACCESS_TOKEN) {
+      console.warn('[Poster] No access token configured, skipping sync');
+      return { categoriesSynced: 0, productsSynced: 0, errors: 0 };
+    }
+
+    let categoriesSynced = 0;
+    let productsSynced = 0;
+    let errors = 0;
+
+    try {
+      const [categories, products] = await Promise.all([this.getCategories(), this.getProducts()]);
+
+      await this.prisma.$transaction(async (tx) => {
+        // 1) Categories sync
+        for (const category of categories) {
+          const posterCategoryId = toNumber(category.category_id);
+          if (posterCategoryId === null) {
+            errors++;
+            continue;
+          }
+
+          await tx.category.upsert({
+            where: { posterId: posterCategoryId },
+            update: {
+              name: category.category_name,
+              isActive: String(category.hidden ?? '0') !== '1',
+            },
+            create: {
+              posterId: posterCategoryId,
+              name: category.category_name,
+              isActive: String(category.hidden ?? '0') !== '1',
+            },
+          });
+          categoriesSynced++;
+        }
+
+        // 2) Products sync
+        for (const product of products) {
+          const posterProductId = toNumber(product.product_id);
+          if (posterProductId === null) {
+            errors++;
+            continue;
+          }
+
+          const normalizedPrice = normalizePosterPriceToKopiyky(product.price);
+
+          // resolve category name from product payload or fallback by category id
+          const categoryNameFromId = (() => {
+            const catId = toNumber(product.menu_category_id);
+            if (catId === null) return null;
+            const found = categories.find((c) => toNumber(c.category_id) === catId);
+            return found?.category_name || null;
+          })();
+
+          const categoryName = product.category_name || categoryNameFromId || 'Інше';
+
+          await tx.product.upsert({
+            where: { posterId: posterProductId },
+            update: {
+              // critical mapping
+              posterId: posterProductId,
+              posterProductId: posterProductId,
+              name: product.product_name,
+              category: categoryName,
+              price: normalizedPrice,
+              imageUrl: product.photo || null,
+              isActive: String(product.hidden ?? '0') !== '1',
+            },
+            create: {
+              posterId: posterProductId,
+              posterProductId: posterProductId,
+              name: product.product_name,
+              category: categoryName,
+              price: normalizedPrice,
+              imageUrl: product.photo || null,
+              isActive: String(product.hidden ?? '0') !== '1',
+            },
+          });
+
+          productsSynced++;
+        }
+
+        // 3) Deactivate missing Poster records (soft-clean)
+        const activeCategoryIds = categories
+          .map((c) => toNumber(c.category_id))
+          .filter((id): id is number => id !== null);
+
+        const activeProductIds = products
+          .map((p) => toNumber(p.product_id))
+          .filter((id): id is number => id !== null);
+
+        await tx.category.updateMany({
+          where: { posterId: { notIn: activeCategoryIds } },
+          data: { isActive: false },
+        });
+
+        await tx.product.updateMany({
+          where: {
+            posterId: { not: null, notIn: activeProductIds },
+          },
+          data: { isActive: false },
+        });
+      });
+    } catch (err) {
+      console.error('[Poster] Menu sync failed:', err);
+      errors++;
+    }
+
+    return { categoriesSynced, productsSynced, errors };
+  }
+
   async processTransactionWebhook(payload: {
     account: string;
     object: string;
@@ -118,7 +297,6 @@ export class PosterService {
     }
 
     try {
-      // Fetch full transaction details from Poster
       const txResponse = await fetch(
         `${POSTER_API_URL}/dash.getTransaction?token=${POSTER_ACCESS_TOKEN}&transaction_id=${payload.object_id}`
       );
@@ -127,28 +305,24 @@ export class PosterService {
 
       if (!tx) return { success: false };
 
-      // Find user by poster_client_id
-      let user = tx.client_id
+      const user = tx.client_id
         ? await this.prisma.user.findFirst({ where: { posterClientId: tx.client_id } })
         : null;
 
       if (!user) return { success: false };
 
-      // Calculate points: 1 грн = 1 бал
-      const totalInUAH = Math.round(tx.sum / 100); // Poster stores in kopiyky
+      const totalInUAH = Math.round(tx.sum / 100);
       const pointsEarned = totalInUAH;
 
-      // Award points in a transaction
       const updated = await this.prisma.$transaction(async (prisma) => {
         const updatedUser = await prisma.user.update({
-          where: { id: user!.id },
+          where: { id: user.id },
           data: { points: { increment: pointsEarned } },
         });
 
-        // Log points
         await prisma.pointsLog.create({
           data: {
-            userId: user!.id,
+            userId: user.id,
             amount: pointsEarned,
             type: 'PURCHASE',
             description: `Poster чек #${tx.transaction_id}`,
@@ -156,14 +330,13 @@ export class PosterService {
           },
         });
 
-        // Create/update order record
         const location = tx.spot_id
           ? await prisma.location.findFirst({ where: { posterSpotId: tx.spot_id } })
           : null;
 
         await prisma.order.create({
           data: {
-            userId: user!.id,
+            userId: user.id,
             locationId: location?.id || (await prisma.location.findFirst())!.id,
             posterTransactionId: tx.transaction_id,
             type: 'POS',
@@ -172,7 +345,7 @@ export class PosterService {
             pointsEarned,
             items: {
               create: (tx.products || []).map((p) => ({
-                productId: '', // Will be resolved by poster sync
+                productId: '',
                 quantity: p.num,
                 price: p.price,
                 total: p.price * p.num,
@@ -180,26 +353,6 @@ export class PosterService {
             },
           },
         });
-
-        // Update weekly location battle
-        if (location) {
-          const weekKey = getISOWeekKey(new Date());
-          await prisma.locationBattleWeekly.upsert({
-            where: {
-              locationId_weekKey: { locationId: location.id, weekKey },
-            },
-            update: {
-              totalPoints: { increment: pointsEarned },
-              totalOrders: { increment: 1 },
-            },
-            create: {
-              locationId: location.id,
-              weekKey,
-              totalPoints: pointsEarned,
-              totalOrders: 1,
-            },
-          });
-        }
 
         return updatedUser;
       });
@@ -216,9 +369,78 @@ export class PosterService {
     }
   }
 
+
   /**
-   * Get analytics from Poster for owner dashboard
+   * After payment provider confirms successful payment,
+   * send order to Poster incomingOrders.createIncomingOrder
+   * and save returned incoming_order_id to Order.posterOrderId.
    */
+  async createIncomingOrderForPaidOrder(orderId: string): Promise<{ success: boolean; posterOrderId?: number; reason?: string }> {
+    if (!POSTER_ACCESS_TOKEN) {
+      return { success: false, reason: 'POSTER_TOKEN_MISSING' };
+    }
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        location: { select: { posterSpotId: true } },
+        items: { include: { product: { select: { posterId: true, posterProductId: true } } } },
+      },
+    });
+
+    if (!order) return { success: false, reason: 'ORDER_NOT_FOUND' };
+    if (order.posterOrderId) return { success: true, posterOrderId: order.posterOrderId };
+
+    const spotId = order.location.posterSpotId || Number(process.env.POSTER_SPOT_ID || 0);
+    if (!spotId) return { success: false, reason: 'SPOT_ID_MISSING' };
+
+    const products = order.items
+      .map((item) => {
+        const productPosterId = item.product.posterId || item.product.posterProductId;
+        if (!productPosterId) return null;
+        return {
+          product_id: productPosterId,
+          count: item.quantity,
+        };
+      })
+      .filter((item): item is { product_id: number; count: number } => item !== null);
+
+    if (products.length === 0) {
+      return { success: false, reason: 'NO_PRODUCTS_WITH_POSTER_ID' };
+    }
+
+    const payload = {
+      spot_id: spotId,
+      products,
+      payment: {
+        type: 1,
+        sum: order.total,
+        currency: 'UAH',
+      },
+    };
+
+    const response = await fetch(`${POSTER_API_URL}/incomingOrders.createIncomingOrder?token=${POSTER_ACCESS_TOKEN}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = (await response.json()) as { response?: PosterIncomingOrderResponse };
+    const incomingOrderIdRaw = data.response?.incoming_order_id ?? data.response?.order_id;
+    const incomingOrderId = incomingOrderIdRaw !== undefined ? Number(incomingOrderIdRaw) : NaN;
+
+    if (!response.ok || !Number.isFinite(incomingOrderId)) {
+      return { success: false, reason: 'POSTER_CREATE_INCOMING_FAILED' };
+    }
+
+    await this.prisma.order.update({
+      where: { id: order.id },
+      data: { posterOrderId: incomingOrderId },
+    });
+
+    return { success: true, posterOrderId: incomingOrderId };
+  }
+
   async getAnalytics(spotId?: number): Promise<{
     revenue: number;
     orders: number;
@@ -238,9 +460,7 @@ export class PosterService {
       });
       if (spotId) params.set('spot_id', String(spotId));
 
-      const response = await fetch(
-        `${POSTER_API_URL}/dash.getAnalytics?${params}`
-      );
+      const response = await fetch(`${POSTER_API_URL}/dash.getAnalytics?${params}`);
       const data = await response.json() as { response?: { revenue: number; orders: number; avg_check: number } };
 
       return {
@@ -253,13 +473,4 @@ export class PosterService {
       return { revenue: 0, orders: 0, avgCheck: 0, topProducts: [] };
     }
   }
-}
-
-function getISOWeekKey(date: Date): string {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
-  const week1 = new Date(d.getFullYear(), 0, 4);
-  const weekNum = 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
-  return `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
 }

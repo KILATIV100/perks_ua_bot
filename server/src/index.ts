@@ -49,6 +49,7 @@ import { liveFeedRoutes } from './modules/live-feed/live-feed.routes.js';
 import { secretDrinkRoutes } from './modules/secret-drink/secret-drink.routes.js';
 import { weatherRoutes } from './modules/weather/weather.routes.js';
 import { horoscopeRoutes } from './modules/horoscope/horoscope.routes.js';
+import { webhooksRoutes } from './modules/webhooks/webhooks.routes.js';
 
 // ── Legacy routes (kept during migration) ────────────────────────────────────
 import { orderRoutes as legacyOrderRoutes } from './routes/orders.js';
@@ -116,6 +117,7 @@ app.register(liveFeedRoutes, { prefix: '/api/live-feed' });
 app.register(secretDrinkRoutes, { prefix: '/api/secret-drink' });
 app.register(weatherRoutes, { prefix: '/api/weather' });
 app.register(horoscopeRoutes, { prefix: '/api/horoscope' });
+app.register(webhooksRoutes, { prefix: '/api/webhooks' });
 
 // ── Legacy routes (backward compat — remove once all clients migrated) ───────
 app.register(legacyUserRoutes, { prefix: '/api/user' });
@@ -188,10 +190,36 @@ async function autoSeedLocations(): Promise<void> {
 }
 
 async function autoSeedProducts(): Promise<void> {
-  const count = await prisma.product.count();
-  if (count === 0) {
-    console.log('[AutoSeed] Seeding products...');
-    await prisma.product.createMany({ data: seedProducts });
+  console.log('[AutoSeed] Syncing products...');
+
+  for (const product of seedProducts) {
+    const existing = await prisma.product.findFirst({
+      where: {
+        name: product.name,
+        category: product.category,
+        type: product.type,
+        volume: product.volume,
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      await prisma.product.create({ data: product });
+      continue;
+    }
+
+    await prisma.product.update({
+      where: { id: existing.id },
+      data: {
+        description: product.description,
+        volume: product.volume,
+        price: product.price,
+        category: product.category,
+        type: product.type,
+        imageUrl: product.imageUrl,
+        isActive: true,
+      },
+    });
   }
 }
 
