@@ -1734,6 +1734,34 @@ bot.on('callback_query:data', async (ctx) => {
     return;
   }
 
+
+  if (data.startsWith('order_clarify:')) {
+    const orderId = data.replace('order_clarify:', '');
+
+    try {
+      const response = await fetch(`${API_URL}/api/orders/${orderId}`);
+      const responseData = (await response.json()) as { order?: { user?: { telegramId?: string }, orderNumber?: number } };
+
+      if (!response.ok || !responseData.order?.user?.telegramId) {
+        await ctx.answerCallbackQuery({ text: '❌ Не вдалося знайти замовлення' });
+        return;
+      }
+
+      const userTelegramId = Number(responseData.order.user.telegramId);
+      await bot.api.sendMessage(
+        userTelegramId,
+        `❓ Бариста уточнює деталі до замовлення #${responseData.order.orderNumber || ''}:\nбудь ласка, напишіть у відповідь яке саме *рослинне молоко* або *сироп* ви хочете.`,
+        { parse_mode: 'Markdown' },
+      );
+
+      await ctx.answerCallbackQuery({ text: '📩 Запит на уточнення відправлено' });
+    } catch (error) {
+      console.error('[Order Clarify] Error:', error);
+      await ctx.answerCallbackQuery({ text: "❌ Помилка з'єднання" });
+    }
+    return;
+  }
+
   if (data.startsWith('order_ready:')) {
     const orderId = data.replace('order_ready:', '');
 

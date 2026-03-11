@@ -1,7 +1,6 @@
 /**
  * Poster POS Integration Routes
  *
- * POST /webhook     — Poster webhook receiver (transaction.create, product.update)
  * POST /sync-menu   — Manual menu sync trigger (admin only)
  * GET  /analytics   — Poster analytics for owner dashboard
  */
@@ -15,59 +14,70 @@ export async function posterRoutes(
 ): Promise<void> {
   const posterService = new PosterService(app.prisma);
 
-  /**
-   * Poster webhook endpoint
-   * Called by Poster when events occur (transaction.create, product.update, etc.)
-   */
+
+  // POST /api/poster/webhook (compat webhook endpoint)
   app.post('/webhook', async (request, reply) => {
-    const payload = request.body as {
-      account: string;
-      object: string;
-      object_id: number;
-      action: string;
+    const body = (request.body || {}) as {
+      object?: string;
+      action?: string;
+      object_id?: string | number;
+      account?: string;
       data?: string;
       time?: string;
     };
 
-    console.log(`[Poster Webhook] ${payload.object}.${payload.action} #${payload.object_id}`);
+    reply.status(200).send({ success: true });
 
-    if (payload.object === 'transaction' && payload.action === 'added') {
-      const result = await posterService.processTransactionWebhook(payload);
+    setImmediate(async () => {
+      try {
+        const object = body.object;
+        const action = body.action;
+        const objectId = Number(body.object_id);
+        if (!Number.isFinite(objectId)) return;
 
-      if (result.success && result.userId) {
-        // Notify user via bot about earned points
-        // This will be handled by the bot's push notification system
-        try {
-          const user = await app.prisma.user.findUnique({
-            where: { id: result.userId },
-            select: { telegramId: true },
-          });
-
-          if (user) {
-            // Emit event for bot to pick up
-            if (app.io) {
-              app.io.emit('poster:points-earned', {
-                telegramId: user.telegramId,
-                pointsEarned: result.pointsEarned,
-                newBalance: result.newBalance,
-              });
-            }
-          }
-        } catch (err) {
-          console.error('[Poster Webhook] Failed to emit notification:', err);
+        if ((object === 'product' || object === 'dish') && (action === 'added' || action === 'changed')) {
+          await posterService.syncProductByPosterId(objectId);
+          return;
         }
+
+        if ((object === 'product' || object === 'dish') && action === 'removed') {
+          await posterService.softDeleteProductByPosterId(objectId);
+          return;
+        }
+
+        if (object === 'incoming_order') {
+          const order = await app.prisma.order.findFirst({ where: { posterOrderId: String(objectId) }, select: { id: true } });
+          if (!order) return;
+
+          if (action === 'accept') {
+            await app.prisma.order.update({ where: { id: order.id }, data: { status: 'PREPARING' } });
+            return;
+          }
+          if (action === 'close') {
+            await app.prisma.order.update({ where: { id: order.id }, data: { status: 'READY' } });
+            return;
+          }
+          if (action === 'reject') {
+            await app.prisma.order.update({ where: { id: order.id }, data: { status: 'REJECTED' } });
+            app.log.warn({ orderId: order.id }, 'Order rejected in Poster: refund should be initiated');
+            return;
+          }
+        }
+
+        if (object === 'transaction' && action === 'added') {
+          await posterService.processTransactionWebhook({
+            account: body.account || '',
+            object: 'transaction',
+            object_id: objectId,
+            action: 'added',
+            data: body.data,
+            time: body.time,
+          });
+        }
+      } catch (error) {
+        app.log.error({ err: error, body }, 'Poster webhook processing failed');
       }
-
-      return reply.send({ success: true });
-    }
-
-    if (payload.object === 'product' && payload.action === 'changed') {
-      // Invalidate menu cache and re-sync
-      await posterService.syncMenu();
-      return reply.send({ success: true });
-    }
-
-    return reply.send({ success: true });
+    });
   });
 
   /**
