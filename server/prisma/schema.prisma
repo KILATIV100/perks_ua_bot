@@ -211,7 +211,7 @@ model Product {
   inStock     Boolean     @default(true)
   isActive    Boolean     @default(true)
   /// Poster product_id for sync (new canonical field for cart payloads)
-  posterId         Int?        @unique
+  posterId         String?      @unique
   /// Legacy field, keep for backward compatibility
   posterProductId  Int?        @unique
   createdAt   DateTime    @default(now())
@@ -231,7 +231,7 @@ model Order {
   /// Poster transaction ID (from webhook)
   posterTransactionId  Int?          @unique
   /// Poster incoming order ID for paid online orders
-  posterOrderId        Int?          @unique
+  posterOrderId        String?       @unique
   status               OrderStatus   @default(DRAFT)
   type                 OrderType     @default(BOT)
   deliveryType         DeliveryType  @default(PICKUP)

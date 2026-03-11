@@ -123,9 +123,9 @@ export class PosterService {
     const categoryName = product.category_name || categoryNameFromId || 'Інше';
 
     await this.prisma.product.upsert({
-      where: { posterId: productId },
+      where: { posterId: String(productId) },
       update: {
-        posterId: productId,
+        posterId: String(productId),
         posterProductId: productId,
         name: product.product_name,
         category: categoryName,
@@ -134,7 +134,7 @@ export class PosterService {
         isActive: String(product.hidden ?? '0') !== '1',
       },
       create: {
-        posterId: productId,
+        posterId: String(productId),
         posterProductId: productId,
         name: product.product_name,
         category: categoryName,
@@ -149,7 +149,7 @@ export class PosterService {
 
   async softDeleteProductByPosterId(productId: number): Promise<boolean> {
     const existing = await this.prisma.product.findFirst({
-      where: { OR: [{ posterId: productId }, { posterProductId: productId }] },
+      where: { OR: [{ posterId: String(productId) }, { posterProductId: productId }] },
       select: { id: true },
     });
 
@@ -225,10 +225,10 @@ export class PosterService {
           const categoryName = product.category_name || categoryNameFromId || 'Інше';
 
           await tx.product.upsert({
-            where: { posterId: posterProductId },
+            where: { posterId: String(posterProductId) },
             update: {
               // critical mapping
-              posterId: posterProductId,
+              posterId: String(posterProductId),
               posterProductId: posterProductId,
               name: product.product_name,
               category: categoryName,
@@ -237,7 +237,7 @@ export class PosterService {
               isActive: String(product.hidden ?? '0') !== '1',
             },
             create: {
-              posterId: posterProductId,
+              posterId: String(posterProductId),
               posterProductId: posterProductId,
               name: product.product_name,
               category: categoryName,
@@ -257,7 +257,8 @@ export class PosterService {
 
         const activeProductIds = products
           .map((p) => toNumber(p.product_id))
-          .filter((id): id is number => id !== null);
+          .filter((id): id is number => id !== null)
+          .map((id) => String(id));
 
         await tx.category.updateMany({
           where: { posterId: { notIn: activeCategoryIds } },
@@ -375,7 +376,7 @@ export class PosterService {
    * send order to Poster incomingOrders.createIncomingOrder
    * and save returned incoming_order_id to Order.posterOrderId.
    */
-  async createIncomingOrderForPaidOrder(orderId: string): Promise<{ success: boolean; posterOrderId?: number; reason?: string }> {
+  async createIncomingOrderForPaidOrder(orderId: string): Promise<{ success: boolean; posterOrderId?: string; reason?: string }> {
     if (!POSTER_ACCESS_TOKEN) {
       return { success: false, reason: 'POSTER_TOKEN_MISSING' };
     }
@@ -396,14 +397,14 @@ export class PosterService {
 
     const products = order.items
       .map((item) => {
-        const productPosterId = item.product.posterId || item.product.posterProductId;
+        const productPosterId = item.product.posterId || (item.product.posterProductId ? String(item.product.posterProductId) : null);
         if (!productPosterId) return null;
         return {
-          product_id: productPosterId,
+          product_id: Number(productPosterId),
           count: item.quantity,
         };
       })
-      .filter((item): item is { product_id: number; count: number } => item !== null);
+      .filter((item): item is { product_id: number; count: number } => item !== null && Number.isFinite(item.product_id));
 
     if (products.length === 0) {
       return { success: false, reason: 'NO_PRODUCTS_WITH_POSTER_ID' };
@@ -427,9 +428,9 @@ export class PosterService {
 
     const data = (await response.json()) as { response?: PosterIncomingOrderResponse };
     const incomingOrderIdRaw = data.response?.incoming_order_id ?? data.response?.order_id;
-    const incomingOrderId = incomingOrderIdRaw !== undefined ? Number(incomingOrderIdRaw) : NaN;
+    const incomingOrderId = incomingOrderIdRaw !== undefined ? String(incomingOrderIdRaw) : "";
 
-    if (!response.ok || !Number.isFinite(incomingOrderId)) {
+    if (!response.ok || !incomingOrderId) {
       return { success: false, reason: 'POSTER_CREATE_INCOMING_FAILED' };
     }
 

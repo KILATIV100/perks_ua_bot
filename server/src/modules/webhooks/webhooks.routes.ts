@@ -47,7 +47,7 @@ export async function webhooksRoutes(
 
         if (object === 'incoming_order') {
           const order = await app.prisma.order.findFirst({
-            where: { posterOrderId: objectId },
+            where: { posterOrderId: String(objectId) },
             select: { id: true, status: true, user: { select: { telegramId: true } } },
           });
 
@@ -95,7 +95,7 @@ export async function webhooksRoutes(
             });
 
             // TODO: trigger payment provider refund flow.
-            app.log.warn({ orderId: order.id, posterOrderId: objectId }, 'Order rejected in Poster: refund should be initiated');
+            app.log.warn({ orderId: order.id, posterOrderId: String(objectId) }, 'Order rejected in Poster: refund should be initiated');
             return;
           }
 
