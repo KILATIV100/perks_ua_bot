@@ -188,10 +188,36 @@ async function autoSeedLocations(): Promise<void> {
 }
 
 async function autoSeedProducts(): Promise<void> {
-  const count = await prisma.product.count();
-  if (count === 0) {
-    console.log('[AutoSeed] Seeding products...');
-    await prisma.product.createMany({ data: seedProducts });
+  console.log('[AutoSeed] Syncing products...');
+
+  for (const product of seedProducts) {
+    const existing = await prisma.product.findFirst({
+      where: {
+        name: product.name,
+        category: product.category,
+        type: product.type,
+        volume: product.volume,
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      await prisma.product.create({ data: product });
+      continue;
+    }
+
+    await prisma.product.update({
+      where: { id: existing.id },
+      data: {
+        description: product.description,
+        volume: product.volume,
+        price: product.price,
+        category: product.category,
+        type: product.type,
+        imageUrl: product.imageUrl,
+        isActive: true,
+      },
+    });
   }
 }
 
