@@ -24,6 +24,7 @@ export async function productRoutes(
           category: true,
           type: true,
           imageUrl: true,
+          posterId: true,
         },
       });
 

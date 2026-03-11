@@ -187,6 +187,18 @@ model Location {
   @@map("locations")
 }
 
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String
+  posterId  Int      @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("categories")
+}
+
 model Product {
   id          String      @id @default(cuid())
   name        String
@@ -198,8 +210,10 @@ model Product {
   imageUrl    String?
   inStock     Boolean     @default(true)
   isActive    Boolean     @default(true)
-  /// Poster product_id for sync
-  posterProductId Int?        @unique
+  /// Poster product_id for sync (new canonical field for cart payloads)
+  posterId         Int?        @unique
+  /// Legacy field, keep for backward compatibility
+  posterProductId  Int?        @unique
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
   orderItems  OrderItem[]
@@ -216,6 +230,8 @@ model Order {
   location             Location      @relation(fields: [locationId], references: [id])
   /// Poster transaction ID (from webhook)
   posterTransactionId  Int?          @unique
+  /// Poster incoming order ID for paid online orders
+  posterOrderId        Int?          @unique
   status               OrderStatus   @default(DRAFT)
   type                 OrderType     @default(BOT)
   deliveryType         DeliveryType  @default(PICKUP)
