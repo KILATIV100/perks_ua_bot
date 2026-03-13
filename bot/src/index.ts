@@ -1,4 +1,5 @@
-import { Bot, InlineKeyboard, Keyboard } from 'grammy';
+import { createServer, type Server as HttpServer } from 'node:http';
+import { Bot, InlineKeyboard, Keyboard, webhookCallback } from 'grammy';
 
 // API Response Types
 interface UserRoleResponse {
@@ -83,6 +84,9 @@ interface OrderStatusUpdateResponse {
 // Environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const API_URL = process.env.API_URL || 'https://backend-production-5ee9.up.railway.app';
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
+const WEBHOOK_PATH = process.env.WEBHOOK_PATH || `/telegram/webhook/${BOT_TOKEN}`;
+const PORT = Number(process.env.PORT) || 3001;
 
 // WebApp URL - perkup.com.ua
 const WEB_APP_URL = 'https://perkup.com.ua';
@@ -98,9 +102,9 @@ const bot = new Bot(BOT_TOKEN);
 
 // PerkUp locations in Brovary
 const LOCATIONS = [
-  { name: 'Mark Mall', lat: 50.51482724566517, lng: 30.782198499061632 },
-  { name: 'Парк "Приозерний"', lat: 50.501291914923804, lng: 30.754033777909726 },
-  { name: 'ЖК "Krona Park 2" (незабаром відкриття)', lat: 50.51726299985014, lng: 30.779625658162075 },
+  { name: 'Mark Mall', lat: 50.51485367479439, lng: 30.78219892858682 },
+  { name: 'Парк "Приозерний"', lat: 50.50128659421246, lng: 30.754029265863245 },
+  { name: 'Крона Парк', lat: 50.5113, lng: 30.7731 },
 ];
 
 // Notification radius in meters (500m)
@@ -127,6 +131,12 @@ const waitingForGrantPoints = new Set<number>();
 // Store owners waiting to send audio file for radio
 const waitingForRadioTrack = new Set<number>();
 
+// Store owners waiting for role assignment input
+const waitingForRoleAssignment = new Set<number>();
+
+// Store owners waiting for secret drink input
+const waitingForSecretDrink = new Set<number>();
+
 // Random notification messages
 const PROXIMITY_MESSAGES = [
   "Відчуваєш цей аромат? ☕️ Ти всього в 5 хвилинах від ідеального капучино. Заходь!",
@@ -139,17 +149,32 @@ const PROXIMITY_MESSAGES = [
 /**
  * Check user role via API
  */
-async function getUserRole(telegramId: number): Promise<UserRoleResponse> {
+async function getUserRole(telegramId: number): Promise<UserRoleResponse & { isBarista?: boolean }> {
   try {
     const response = await fetch(`${API_URL}/api/admin/check-role?telegramId=${telegramId}`);
     if (response.ok) {
       const data = (await response.json()) as UserRoleResponse;
-      return data;
+      return { ...data, isBarista: data.role === 'BARISTA' };
     }
   } catch (error) {
     console.error('[API] Failed to check role:', error);
   }
-  return { role: 'USER', isAdmin: false, isOwner: false };
+  return { role: 'USER', isAdmin: false, isOwner: false, isBarista: false };
+}
+
+/**
+ * Get user balance via API
+ */
+async function getUserBalance(telegramId: number): Promise<{ points: number; level: number } | null> {
+  try {
+    const response = await fetch(`${API_URL}/api/loyalty/balance?telegramId=${telegramId}`);
+    if (response.ok) {
+      return (await response.json()) as { points: number; level: number };
+    }
+  } catch (error) {
+    console.error('[API] Failed to get balance:', error);
+  }
+  return null;
 }
 
 /**
@@ -419,11 +444,24 @@ function getUserKeyboard(): Keyboard {
 }
 
 /**
+ * Get Barista keyboard (verify code + order management)
+ */
+function getBaristaKeyboard(): Keyboard {
+  return new Keyboard()
+    .text('🔍 Перевірити код')
+    .resized();
+}
+
+/**
  * Get Admin keyboard (verify code only, WebApp via Menu Button)
  */
 function getAdminKeyboard(): Keyboard {
   return new Keyboard()
     .text('🔍 Перевірити код')
+    .text('📊 Статистика за 24г')
+    .row()
+    .text('📣 Розсилка')
+    .text('🔒 Секретний напій')
     .resized();
 }
 
@@ -438,9 +476,11 @@ function getOwnerKeyboard(): Keyboard {
     .row()
     .text('📊 Статистика за 24г')
     .text('📣 Розсилка')
+    .text('🔒 Секретний напій')
     .row()
-    .text('👥 Керування адмінами')
+    .text('👥 Керування ролями')
     .text('🎵 Додати трек')
+    .text('📦 Експорт')
     .resized();
 }
 
@@ -498,13 +538,14 @@ bot.command('start', async (ctx) => {
   }
 
   // Check user role
-  const { isAdmin, isOwner } = await getUserRole(userId);
+  const { isAdmin, isOwner, isBarista } = await getUserRole(userId);
 
   if (isOwner) {
     await ctx.reply(
       `Привіт, *${firstName}*! 👑\n\n` +
         `Ласкаво просимо до *PerkUp*!\n\n` +
-        `Ти власник — використовуй меню нижче для керування.`,
+        `Ти власник — використовуй меню нижче для керування.\n\n` +
+        `📍 Локації: Mark Mall · Парк Приозерний · Крона Парк`,
       {
         parse_mode: 'Markdown',
         reply_markup: getOwnerKeyboard(),
@@ -517,7 +558,7 @@ bot.command('start', async (ctx) => {
     await ctx.reply(
       `Привіт, *${firstName}*! 🛡\n\n` +
         `Ласкаво просимо до *PerkUp*!\n\n` +
-        `Ти адміністратор — використовуй кнопку нижче для перевірки кодів.`,
+        `Ти адміністратор — використовуй кнопки нижче для роботи.`,
       {
         parse_mode: 'Markdown',
         reply_markup: getAdminKeyboard(),
@@ -526,24 +567,34 @@ bot.command('start', async (ctx) => {
     return;
   }
 
-  // Regular user
+  if (isBarista) {
+    await ctx.reply(
+      `Привіт, *${firstName}*! ☕\n\n` +
+        `Ласкаво просимо до *PerkUp*!\n\n` +
+        `Ти баріста — використовуй кнопку нижче для перевірки кодів.`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: getBaristaKeyboard(),
+      }
+    );
+    return;
+  }
+
+  // Regular user — ТЗ onboarding flow
   const referralNote = referrerId
-    ? `\n🤝 Бро, ти прийшов від друга! Після першого крутка колеса ви обоє отримаєте бонуси.\n`
+    ? `\n🤝 Ти прийшов від друга! Після першого крутка колеса ви обоє отримаєте бонуси.\n`
     : '';
 
+  // Step 1: Greeting with question
   await ctx.reply(
-    `Привіт, ${firstName}! 👋\n\n` +
-      `Ласкаво просимо до *PerkUp* — твого помічника у світі кави! ☕\n${referralNote}\n` +
-      `Тут ти можеш:\n` +
-      `• Обрати найближчу кав'ярню\n` +
-      `• Зробити замовлення онлайн\n` +
-      `• Накопичувати бонуси\n` +
-      `• Крутити Колесо Фортуни 🎡\n\n` +
-      `📍 *Надішли Live Location* (транслювати геолокацію) — і ми автоматично повідомимо, коли будеш поруч з кав'ярнею!\n\n` +
-      `Натисни кнопку *PerkUP* зліва від поля вводу, щоб почати! 👇`,
+    `Привіт, ${firstName}! ☕\n\n` +
+      `Ласкаво просимо до *PerkUp* — твоєї кавової екосистеми в Броварах!\n${referralNote}\n` +
+      `Ти вже бував у нас?`,
     {
       parse_mode: 'Markdown',
-      reply_markup: getUserKeyboard(),
+      reply_markup: new InlineKeyboard()
+        .text('✅ Так, я постійний', 'onboard_regular')
+        .text('👋 Перший раз', 'onboard_new'),
     }
   );
 });
@@ -662,6 +713,311 @@ bot.command('export', async (ctx) => {
   await ctx.reply(message, { parse_mode: 'Markdown' });
 });
 
+// ── New bot commands per ТЗ v2.0 ──────────────────────────────────────────
+
+// /menu — Open Mini App on menu section
+bot.command('menu', async (ctx) => {
+  const keyboard = new InlineKeyboard().webApp('☕ Відкрити меню', WEB_APP_URL);
+  await ctx.reply('📋 Натисни кнопку щоб переглянути актуальне меню:', {
+    reply_markup: keyboard,
+  });
+});
+
+// /balance — Show current points balance and level
+bot.command('balance', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const balance = await getUserBalance(userId);
+  if (!balance) {
+    await ctx.reply('❌ Не вдалося отримати баланс. Спробуй пізніше.');
+    return;
+  }
+
+  const nextLevelPoints = balance.level * 500;
+  const remaining = nextLevelPoints - balance.points;
+
+  await ctx.reply(
+    `💰 *Твій баланс:* ${balance.points} балів\n` +
+      `📊 *Рівень:* ${balance.level}\n\n` +
+      `${remaining > 0 ? `До рівня ${balance.level + 1}: ще *${remaining}* балів` : '🎉 Максимальний рівень!'}`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// /spin — Open wheel of fortune
+bot.command('spin', async (ctx) => {
+  const keyboard = new InlineKeyboard().webApp('🎰 Крутити колесо', WEB_APP_URL);
+  await ctx.reply('🎡 Натисни кнопку щоб крутити Колесо Фортуни:', {
+    reply_markup: keyboard,
+  });
+});
+
+// /dna — Show coffee DNA archetype
+bot.command('dna', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  try {
+    const response = await fetch(`${API_URL}/api/loyalty/balance?telegramId=${userId}`);
+    if (!response.ok) {
+      await ctx.reply('❌ Не вдалося отримати дані. Спробуй пізніше.');
+      return;
+    }
+    // TODO: Implement DNA profile endpoint on server
+    await ctx.reply(
+      '🧬 *Твій кавовий DNA*\n\n' +
+        'Зроби 10+ замовлень щоб розкрити свій кавовий архетип!\n\n' +
+        'Після цього ти зможеш поділитись своїм DNA в сторіс.',
+      { parse_mode: 'Markdown' }
+    );
+  } catch {
+    await ctx.reply('❌ Не вдалося отримати дані. Спробуй пізніше.');
+  }
+});
+
+// /refer — Show referral link and stats
+bot.command('refer', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const refLink = `https://t.me/perkup_ua_bot?start=ref_${userId}`;
+
+  try {
+    const response = await fetch(`${API_URL}/api/referral/stats?telegramId=${userId}`);
+    const stats = response.ok ? await response.json() as { referralCount?: number; bonusEarned?: number } : null;
+
+    await ctx.reply(
+      `🤝 *Реферальна програма*\n\n` +
+        `Твоє посилання:\n\`${refLink}\`\n\n` +
+        `👥 Запрошено: *${stats?.referralCount || 0}* друзів\n` +
+        `💰 Зароблено: *${stats?.bonusEarned || 0}* балів\n\n` +
+        `Після першого обертання колеса другом:\n` +
+        `• Ти: *+10 балів*\n` +
+        `• Друг: *+5 балів*`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '📨 Надіслати другу', url: `https://t.me/share/url?url=${encodeURIComponent(refLink)}&text=${encodeURIComponent('Приєднуйся до PerkUp — крути Колесо Фортуни та отримуй безкоштовну каву! ☕🎡')}` },
+          ]],
+        },
+      }
+    );
+  } catch {
+    await ctx.reply('❌ Не вдалося отримати статистику. Спробуй пізніше.');
+  }
+});
+
+// /subscribe — Morning subscription management
+bot.command('subscribe', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  await ctx.reply(
+    `☀️ *Підписка "Ранок за розкладом"*\n\n` +
+      `Оформи підписку і твоя кава буде чекати на тебе щоранку!\n\n` +
+      `Як це працює:\n` +
+      `1. Обери улюблений напій\n` +
+      `2. Обери локацію та час\n` +
+      `3. Обери дні тижня\n` +
+      `4. Кава буде готова до твого приходу!\n\n` +
+      `Бали нараховуються автоматично за кожне замовлення.`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard()
+        .webApp('📦 Оформити підписку', WEB_APP_URL)
+        .row()
+        .text('⏸ Пауза', 'sub_pause')
+        .text('❌ Скасувати', 'sub_cancel'),
+    }
+  );
+});
+
+// /battle — Coffee battle between friends
+bot.command('battle', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  try {
+    const response = await fetch(`${API_URL}/api/battles/active?telegramId=${userId}`);
+    const data = response.ok ? await response.json() as { battles?: Array<{ id: string; category: string; betPoints: number; status: string }> } : null;
+
+    const activeBattles = data?.battles || [];
+
+    let message = `⚔️ *Кавовий Батл*\n\n`;
+
+    if (activeBattles.length > 0) {
+      message += `*Активні батли:*\n`;
+      for (const battle of activeBattles) {
+        message += `• ${battle.category} · Ставка: ${battle.betPoints} балів · ${battle.status}\n`;
+      }
+      message += '\n';
+    }
+
+    message += `Кинь виклик другу — хто більше замовить за тиждень!\n`;
+    message += `Переможець забирає бали обох 🏆`;
+
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard()
+        .text('⚔️ Кинути виклик', 'battle_create')
+        .text('📊 Мої батли', 'battle_history'),
+    });
+  } catch {
+    await ctx.reply('❌ Не вдалося отримати дані батлів.');
+  }
+});
+
+// /verify — Verify bonus code (barista/admin)
+bot.command('verify', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const { isAdmin, isOwner, isBarista } = await getUserRole(userId);
+  if (!isAdmin && !isOwner && !isBarista) {
+    await ctx.reply('❌ Ця команда доступна тільки для баріста та адмінів.');
+    return;
+  }
+
+  waitingForCode.add(userId);
+  await ctx.reply(
+    '🔍 Введи *4-значний код* купону (наприклад, 7341):',
+    { parse_mode: 'Markdown', reply_markup: getCodeVerificationKeyboard() }
+  );
+});
+
+// /broadcast — Mass broadcast (admin/owner)
+bot.command('broadcast', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const { isAdmin, isOwner } = await getUserRole(userId);
+  if (!isAdmin && !isOwner) {
+    await ctx.reply('❌ Ця команда доступна тільки для адмінів.');
+    return;
+  }
+
+  waitingForBroadcast.add(userId);
+  await ctx.reply(
+    '📣 *Розсилка повідомлень*\n\n' +
+      'Введи текст повідомлення для всіх користувачів.\n\n' +
+      '💡 Підтримується Markdown форматування.',
+    { parse_mode: 'Markdown', reply_markup: getBroadcastKeyboard() }
+  );
+});
+
+// /roles — Role management (owner only)
+bot.command('roles', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const { isOwner } = await getUserRole(userId);
+  if (!isOwner) {
+    await ctx.reply('❌ Ця команда доступна тільки для власника.');
+    return;
+  }
+
+  const admins = await getAdminList(userId);
+  let message = '👥 *Керування ролями*\n\n';
+
+  const grouped: Record<string, typeof admins> = { ADMIN: [], BARISTA: [] };
+  for (const a of admins) {
+    if (grouped[a.role]) grouped[a.role].push(a);
+  }
+
+  if (grouped.ADMIN.length > 0) {
+    message += '*Адміни:*\n';
+    grouped.ADMIN.forEach((admin, i) => {
+      const name = admin.firstName || admin.username || admin.telegramId;
+      message += `${i + 1}. ${name} (ID: \`${admin.telegramId}\`)\n`;
+    });
+    message += '\n';
+  }
+
+  if (grouped.BARISTA.length > 0) {
+    message += '*Баристи:*\n';
+    grouped.BARISTA.forEach((b, i) => {
+      const name = b.firstName || b.username || b.telegramId;
+      message += `${i + 1}. ${name} (ID: \`${b.telegramId}\`)\n`;
+    });
+    message += '\n';
+  }
+
+  message += 'Щоб *призначити роль*, напиши:\n';
+  message += '`адмін ID` або `барiста ID` або `видалити ID`';
+
+  waitingForRoleAssignment.add(userId);
+  await ctx.reply(message, {
+    parse_mode: 'Markdown',
+    reply_markup: new Keyboard().text('⬅️ Назад').resized(),
+  });
+});
+
+// /promo — Launch a promo (owner only)
+bot.command('promo', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const { isOwner } = await getUserRole(userId);
+  if (!isOwner) {
+    await ctx.reply('❌ Ця команда доступна тільки для власника.');
+    return;
+  }
+
+  await ctx.reply(
+    '🎉 *Запуск акції*\n\n' +
+      'Формат: `/promo 20% 3г`\n' +
+      '20% — розмір знижки\n' +
+      '3г — тривалість (години)\n\n' +
+      'Акція буде анонсована всім активним юзерам.',
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// /secret — Set secret drink (admin/owner)
+bot.command('secret', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const { isAdmin, isOwner } = await getUserRole(userId);
+  if (!isAdmin && !isOwner) {
+    await ctx.reply('❌ Ця команда доступна тільки для адмінів.');
+    return;
+  }
+
+  waitingForSecretDrink.add(userId);
+  await ctx.reply(
+    '🔒 *Секретний напій дня*\n\n' +
+      'Введи у форматі:\n' +
+      '`Назва напою | ціна | знижка%`\n\n' +
+      'Приклад: `Матча Латте мигдальне | 89 | 30`\n\n' +
+      'Натисни *⬅️ Скасувати* для виходу.',
+    { parse_mode: 'Markdown', reply_markup: getCodeVerificationKeyboard() }
+  );
+});
+
+// /wheel — Configure wheel prizes (owner only)
+bot.command('wheel', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const { isOwner } = await getUserRole(userId);
+  if (!isOwner) {
+    await ctx.reply('❌ Ця команда доступна тільки для власника.');
+    return;
+  }
+
+  await ctx.reply(
+    '🎰 *Налаштування колеса фортуни*\n\n' +
+      'Поточні призи: 5, 10, 15 балів\n' +
+      'Поточні ваги: 40%, 30%, 10% (20% — порожньо)\n\n' +
+      'Формат: `/wheel 5 10 15 25`\n' +
+      '(мін, середній, макс, спеціальний)',
+    { parse_mode: 'Markdown' }
+  );
+});
+
 // Handle text messages (including keyboard buttons)
 bot.on('message:text', async (ctx) => {
   const userId = ctx.from?.id;
@@ -678,6 +1034,8 @@ bot.on('message:text', async (ctx) => {
     waitingForBroadcast.delete(userId);
     waitingForGrantPoints.delete(userId);
     waitingForRadioTrack.delete(userId);
+    waitingForRoleAssignment.delete(userId);
+    waitingForSecretDrink.delete(userId);
     await ctx.reply('🏠 Головне меню', { reply_markup: getOwnerKeyboard() });
     return;
   }
@@ -849,6 +1207,14 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
+  // Handle "Cancel" button during secret drink input
+  if (text === '⬅️ Скасувати' && waitingForSecretDrink.has(userId)) {
+    waitingForSecretDrink.delete(userId);
+    const keyboard = isOwner ? getOwnerKeyboard() : getAdminKeyboard();
+    await ctx.reply('🏠 Встановлення секретного напою скасовано.', { reply_markup: keyboard });
+    return;
+  }
+
   if (text === '⬅️ Скасувати' && waitingForBroadcast.has(userId)) {
     waitingForBroadcast.delete(userId);
     await ctx.reply('🏠 Повернулися до головного меню.', { reply_markup: getOwnerKeyboard() });
@@ -872,35 +1238,155 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
-  // Handle "Admin Management" button (Owner only)
-  if (text === '👥 Керування адмінами' && isOwner) {
+  // Handle "Secret Drink" button (Admin/Owner)
+  if (text === '🔒 Секретний напій' && (isAdmin || isOwner)) {
     waitingForCode.delete(userId);
     waitingForBroadcast.delete(userId);
     waitingForGrantPoints.delete(userId);
     waitingForRadioTrack.delete(userId);
-    const admins = await getAdminList(userId);
+    waitingForSecretDrink.add(userId);
 
-    let message = '👥 *Керування адмінами*\n\n';
+    await ctx.reply(
+      '🔒 *Секретний напій дня*\n\n' +
+        'Введи у форматі:\n' +
+        '`Назва напою | ціна | знижка%`\n\n' +
+        'Приклад: `Матча Латте мигдальне | 89 | 30`\n\n' +
+        'Натисни *⬅️ Скасувати* для виходу.',
+      { parse_mode: 'Markdown', reply_markup: getCodeVerificationKeyboard() }
+    );
+    return;
+  }
 
-    const adminList = admins.filter(a => a.role === 'ADMIN');
-    if (adminList.length === 0) {
-      message += '_Адмінів поки немає_\n\n';
-    } else {
-      message += '*Поточні адміни:*\n';
-      adminList.forEach((admin, i) => {
-        const name = admin.firstName || admin.username || admin.telegramId;
-        message += `${i + 1}. ${name} (ID: \`${admin.telegramId}\`)\n`;
+  // Handle secret drink input
+  if (waitingForSecretDrink.has(userId) && (isAdmin || isOwner)) {
+    waitingForSecretDrink.delete(userId);
+
+    const parts = text.split('|').map(s => s.trim());
+    if (parts.length < 2) {
+      await ctx.reply('❌ Невірний формат. Використовуй: `Назва | ціна | знижка%`', {
+        parse_mode: 'Markdown',
+        reply_markup: isOwner ? getOwnerKeyboard() : getAdminKeyboard(),
       });
-      message += '\n';
+      return;
     }
 
-    message += 'Щоб *додати* адміна, надішли ID користувача.\n';
-    message += 'Щоб *видалити* адміна, напиши: `видалити ID`\n\n';
+    const productName = parts[0];
+    const originalPrice = parseInt(parts[1], 10) * 100; // to kopiyky
+    const discountPercent = parts[2] ? parseInt(parts[2], 10) : 30;
+
+    try {
+      const response = await fetch(`${API_URL}/api/secret-drink/set`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          telegramId: String(userId),
+          productName,
+          originalPrice,
+          discountPercent,
+        }),
+      });
+
+      if (response.ok) {
+        const discountPrice = Math.round(originalPrice * (1 - discountPercent / 100) / 100);
+        await ctx.reply(
+          `✅ *Секретний напій встановлено!*\n\n` +
+            `🥤 ${productName}\n` +
+            `💰 ${parts[1]} грн → *${discountPrice} грн* (-${discountPercent}%)\n` +
+            `📦 Кількість: 15\n` +
+            `⏰ Доступний 3 години`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: isOwner ? getOwnerKeyboard() : getAdminKeyboard(),
+          }
+        );
+      } else {
+        await ctx.reply('❌ Не вдалося встановити секретний напій.', {
+          reply_markup: isOwner ? getOwnerKeyboard() : getAdminKeyboard(),
+        });
+      }
+    } catch {
+      await ctx.reply('❌ Помилка з\'єднання.', {
+        reply_markup: isOwner ? getOwnerKeyboard() : getAdminKeyboard(),
+      });
+    }
+    return;
+  }
+
+  // Handle "Export" button (Owner only)
+  if (text === '📦 Експорт' && isOwner) {
+    waitingForCode.delete(userId);
+    waitingForBroadcast.delete(userId);
+    waitingForGrantPoints.delete(userId);
+    waitingForRadioTrack.delete(userId);
+
+    await ctx.reply('⏳ Експортую дані...');
+
+    const exportData = await getExportUsers(userId);
+    if (!exportData) {
+      await ctx.reply('❌ Не вдалося експортувати дані.', { reply_markup: getOwnerKeyboard() });
+      return;
+    }
+
+    // Build CSV content
+    let csv = 'Telegram ID,Ім\'я,Username,Бали,Роль\n';
+    for (const user of exportData.users) {
+      csv += `${user.telegramId},${user.firstName || ''},${user.username || ''},${user.points},${user.role}\n`;
+    }
+
+    const exportedTime = new Date(exportData.exportedAt).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
+
+    await ctx.reply(
+      `📦 *Експорт*\n\n` +
+        `👤 Всього: *${exportData.totalUsers}*\n` +
+        `🪙 Балів в обігу: *${exportData.totalPoints}*\n` +
+        `🕒 ${exportedTime}`,
+      { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+    );
+    return;
+  }
+
+  // Handle "Role Management" button (Owner only) — unified with /roles
+  if ((text === '👥 Керування ролями' || text === '👥 Керування адмінами') && isOwner) {
+    waitingForCode.delete(userId);
+    waitingForBroadcast.delete(userId);
+    waitingForGrantPoints.delete(userId);
+    waitingForRadioTrack.delete(userId);
+    waitingForSecretDrink.delete(userId);
+    const admins = await getAdminList(userId);
+
+    let message = '👥 *Керування ролями*\n\n';
+
+    const adminList = admins.filter(a => a.role === 'ADMIN');
+    const baristaList = admins.filter(a => a.role === 'BARISTA');
+
+    if (adminList.length === 0 && baristaList.length === 0) {
+      message += '_Немає призначених ролей_\n\n';
+    } else {
+      if (adminList.length > 0) {
+        message += '*Адміни:*\n';
+        adminList.forEach((admin, i) => {
+          const name = admin.firstName || admin.username || admin.telegramId;
+          message += `${i + 1}. ⚡ ${name} (ID: \`${admin.telegramId}\`)\n`;
+        });
+        message += '\n';
+      }
+      if (baristaList.length > 0) {
+        message += '*Баристи:*\n';
+        baristaList.forEach((b, i) => {
+          const name = b.firstName || b.username || b.telegramId;
+          message += `${i + 1}. ☕ ${name} (ID: \`${b.telegramId}\`)\n`;
+        });
+        message += '\n';
+      }
+    }
+
+    message += 'Щоб *призначити*, напиши:\n';
+    message += '`адмін ID` або `баріста ID`\n';
+    message += 'Щоб *видалити*, напиши: `видалити ID`\n\n';
     message += 'Натисни *⬅️ Назад* щоб повернутися.';
 
     waitingForAdminId.add(userId);
 
-    // Show admin management keyboard with back button
     const adminManagementKeyboard = new Keyboard()
       .text('⬅️ Назад')
       .resized();
@@ -977,7 +1463,7 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
-  // Handle admin ID input (Owner only)
+  // Handle role management input (Owner only)
   if (waitingForAdminId.has(userId) && isOwner) {
     // Check for "delete" command
     const deleteMatch = text.match(/^видалити\s+(\d+)$/i);
@@ -988,7 +1474,7 @@ bot.on('message:text', async (ctx) => {
       if (result.success) {
         waitingForAdminId.delete(userId);
         await ctx.reply(
-          `✅ Адміна з ID \`${targetId}\` видалено.`,
+          `✅ Роль користувача \`${targetId}\` скинуто до USER.`,
           { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
         );
       } else {
@@ -997,19 +1483,39 @@ bot.on('message:text', async (ctx) => {
       return;
     }
 
-    // Try to add new admin
+    // Check for "admin ID" or "barista ID" format
+    const roleMatch = text.match(/^(адмін|адміністратор|барі?ста)\s+(\d+)$/i);
+    if (roleMatch) {
+      const roleName = roleMatch[1].toLowerCase();
+      const targetId = parseInt(roleMatch[2], 10);
+      const newRole = roleName.startsWith('адмін') ? 'ADMIN' : 'BARISTA';
+
+      const result = await setUserRole(userId, targetId, newRole);
+      if (result.success) {
+        waitingForAdminId.delete(userId);
+        const roleLabel = newRole === 'ADMIN' ? 'адміном ⚡' : 'баристою ☕';
+        await ctx.reply(
+          `✅ Користувача \`${targetId}\` призначено ${roleLabel}!`,
+          { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+        );
+      } else {
+        await ctx.reply(`❌ Помилка: ${result.error}`);
+      }
+      return;
+    }
+
+    // Try to add new admin (backward compat — just ID means admin)
     const newAdminId = parseInt(text, 10);
     if (isNaN(newAdminId)) {
-      await ctx.reply('❌ Невірний ID. Введи числовий Telegram ID користувача.');
+      await ctx.reply('❌ Невірний формат. Використовуй: `адмін ID` або `баріста ID`', { parse_mode: 'Markdown' });
       return;
     }
 
     const result = await setUserRole(userId, newAdminId, 'ADMIN');
-
     if (result.success) {
       waitingForAdminId.delete(userId);
       await ctx.reply(
-        `✅ Користувача з ID \`${newAdminId}\` призначено адміном!`,
+        `✅ Користувача \`${newAdminId}\` призначено адміном!`,
         { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
       );
     } else {
@@ -1137,9 +1643,46 @@ bot.on('edited_message:location', async (ctx) => {
 bot.on('callback_query:data', async (ctx) => {
   const data = ctx.callbackQuery.data;
   const userId = ctx.from?.id;
+  const firstName = ctx.from?.first_name || 'друже';
 
   if (!userId) {
     await ctx.answerCallbackQuery({ text: 'Помилка' });
+    return;
+  }
+
+  // Onboarding callbacks
+  if (data === 'onboard_regular' || data === 'onboard_new') {
+    await ctx.answerCallbackQuery();
+
+    const welcomeBonus = data === 'onboard_new' ? 50 : 0;
+    const welcomeMessage = data === 'onboard_new'
+      ? `\n🎁 Тримай *+50 вітальних балів*!`
+      : `\n❤️ Радi бачити тебе знову!`;
+
+    // Give welcome points for new users
+    if (welcomeBonus > 0) {
+      try {
+        await addPoints(OWNER_ID, welcomeBonus, userId);
+      } catch {
+        console.error('[Onboard] Failed to add welcome points');
+      }
+    }
+
+    const keyboard = new InlineKeyboard().webApp('☕ Відкрити PerkUp', WEB_APP_URL);
+
+    await ctx.editMessageText(
+      `Чудово, ${firstName}! 🎉${welcomeMessage}\n\n` +
+        `📍 *3 локації:* Mark Mall · Парк Приозерний · Крона Парк\n\n` +
+        `В PerkUp ти можеш:\n` +
+        `• Замовляти каву через додаток\n` +
+        `• Крутити Колесо Фортуни 🎰\n` +
+        `• Грати в ігри та отримувати бали\n` +
+        `• Слухати PerkUp Radio 🎵\n` +
+        `• Бачити живий рядок замовлень\n` +
+        `• Батлитись з друзями ⚔️\n\n` +
+        `Натисни кнопку нижче щоб почати! 👇`,
+      { parse_mode: 'Markdown', reply_markup: keyboard }
+    );
     return;
   }
 
@@ -1191,6 +1734,34 @@ bot.on('callback_query:data', async (ctx) => {
     return;
   }
 
+
+  if (data.startsWith('order_clarify:')) {
+    const orderId = data.replace('order_clarify:', '');
+
+    try {
+      const response = await fetch(`${API_URL}/api/orders/${orderId}`);
+      const responseData = (await response.json()) as { order?: { user?: { telegramId?: string }, orderNumber?: number } };
+
+      if (!response.ok || !responseData.order?.user?.telegramId) {
+        await ctx.answerCallbackQuery({ text: '❌ Не вдалося знайти замовлення' });
+        return;
+      }
+
+      const userTelegramId = Number(responseData.order.user.telegramId);
+      await bot.api.sendMessage(
+        userTelegramId,
+        `❓ Бариста уточнює деталі до замовлення #${responseData.order.orderNumber || ''}:\nбудь ласка, напишіть у відповідь яке саме *рослинне молоко* або *сироп* ви хочете.`,
+        { parse_mode: 'Markdown' },
+      );
+
+      await ctx.answerCallbackQuery({ text: '📩 Запит на уточнення відправлено' });
+    } catch (error) {
+      console.error('[Order Clarify] Error:', error);
+      await ctx.answerCallbackQuery({ text: "❌ Помилка з'єднання" });
+    }
+    return;
+  }
+
   if (data.startsWith('order_ready:')) {
     const orderId = data.replace('order_ready:', '');
 
@@ -1230,43 +1801,69 @@ bot.catch((err) => {
 });
 
 // Graceful shutdown
-process.once('SIGINT', () => { console.log('🛑 SIGINT received, stopping...'); bot.stop(); });
-process.once('SIGTERM', () => { console.log('🛑 SIGTERM received, stopping...'); bot.stop(); });
+let webhookServer: HttpServer | null = null;
 
-// Start bot with retry logic for 409 conflicts during Railway deployments
+async function stopBot(signal: string): Promise<void> {
+  console.log(`🛑 ${signal} received, stopping...`);
+
+  if (webhookServer) {
+    await new Promise<void>((resolve, reject) => {
+      webhookServer?.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  await bot.stop();
+}
+
+process.once('SIGINT', () => { void stopBot('SIGINT'); });
+process.once('SIGTERM', () => { void stopBot('SIGTERM'); });
+
 async function startBot() {
   console.log('🤖 Starting PerkUp bot...');
 
-  const MAX_RETRIES = 5;
-  const INITIAL_DELAY = 3000; // 3s
+  if (process.env.NODE_ENV === 'production' && WEBHOOK_DOMAIN) {
+    const webhookDomain = WEBHOOK_DOMAIN.replace(/\/$/, '');
+    const webhookUrl = `${webhookDomain}${WEBHOOK_PATH}`;
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const delay = INITIAL_DELAY * attempt; // 3s, 6s, 9s, 12s, 15s
-    console.log(`[Boot] Attempt ${attempt}/${MAX_RETRIES}: waiting ${delay / 1000}s for old instance to stop...`);
-    await new Promise(r => setTimeout(r, delay));
+    await bot.api.setWebhook(webhookUrl, { drop_pending_updates: true });
+    console.log(`[Boot] Webhook set: ${webhookUrl}`);
 
-    try {
-      // Delete any existing webhook/getUpdates session before starting
-      await bot.api.deleteWebhook({ drop_pending_updates: true });
-      console.log('[Boot] Webhook cleared, starting polling...');
-
-      await bot.start({
-        onStart: (botInfo) => {
-          console.log(`✅ Bot @${botInfo.username} is running!`);
-        },
-        drop_pending_updates: true,
-      });
-      return; // started successfully
-    } catch (err: unknown) {
-      const is409 = err instanceof Error && err.message.includes('409');
-      if (is409 && attempt < MAX_RETRIES) {
-        console.log(`[Boot] Got 409 conflict, old instance still running. Retrying...`);
-        continue;
+    const callback = webhookCallback(bot, 'http');
+    webhookServer = createServer((req, res) => {
+      if (req.url === WEBHOOK_PATH) {
+        void callback(req, res);
+        return;
       }
-      console.error(`[Boot] Failed to start bot after ${attempt} attempts:`, err);
-      throw err;
-    }
+
+      res.statusCode = 200;
+      res.end('ok');
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      webhookServer?.listen(PORT, '0.0.0.0', () => resolve());
+      webhookServer?.once('error', reject);
+    });
+
+    const me = await bot.api.getMe();
+    console.log(`✅ Bot @${me.username} is running in webhook mode on port ${PORT}`);
+    return;
   }
+
+  await bot.api.deleteWebhook({ drop_pending_updates: true });
+  console.log('[Boot] Webhook cleared, starting long polling...');
+
+  await bot.start({
+    onStart: (botInfo) => {
+      console.log(`✅ Bot @${botInfo.username} is running in polling mode`);
+    },
+    drop_pending_updates: true,
+  });
 }
 
 startBot();

@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import type { CartItem } from './Menu';
+import { useTelegram } from '../hooks/useTelegram';
 
 interface CheckoutProps {
   apiUrl: string;
@@ -23,31 +24,33 @@ interface CheckoutProps {
 const PICKUP_TIMES = [5, 10, 15, 20];
 
 export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, theme, onClose, onSuccess }: CheckoutProps) {
+  const { webApp, MainButton, tgHaptic } = useTelegram();
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'telegram_pay'>('cash');
   const [pickupMinutes, setPickupMinutes] = useState(10);
   const [shippingAddress, setShippingAddress] = useState('');
   const [shippingPhone, setShippingPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [comment, setComment] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const total = cart.reduce((sum, item) => sum + parseFloat(item.product.price) * item.quantity, 0);
   const isShippingOrder = cart.some(item => item.product.type === 'MERCH' || item.product.type === 'BEANS');
 
-  const handleSubmit = async () => {
-    if (submitting) return;
-    setError(null);
+  const handleCheckout = useCallback(async () => {
+    if (submitting || cart.length === 0) return;
 
-    if (isShippingOrder) {
-      if (!shippingAddress.trim() || !shippingPhone.trim()) {
-        setError("Будь ласка, заповніть адресу та телефон для доставки.");
-        return;
-      }
+    setError(null);
+    tgHaptic.impact('heavy');
+
+    if (isShippingOrder && (!shippingAddress.trim() || !shippingPhone.trim())) {
+      setError('Будь ласка, заповніть адресу та телефон для доставки.');
+      tgHaptic.notification('warning');
+      return;
     }
 
     setSubmitting(true);
 
     try {
-
       await axios.post(`${apiUrl}/api/orders`, {
         telegramId: String(telegramId),
         locationId,
@@ -56,7 +59,8 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
         deliveryType: isShippingOrder ? 'shipping' : 'pickup',
         shippingAddr: isShippingOrder ? shippingAddress.trim() : undefined,
         phone: isShippingOrder ? shippingPhone.trim() : undefined,
-        items: cart.map(item => ({
+        comment: comment.trim() || undefined,
+        items: cart.map((item) => ({
           productId: item.product.id,
           name: item.product.name,
           quantity: item.quantity,
@@ -64,18 +68,56 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
         })),
       });
 
+      tgHaptic.notification('success');
       onSuccess();
+      webApp.close();
     } catch (err) {
       console.error('[Checkout] Error:', err);
-      if (axios.isAxiosError(err) && err.response?.data?.error) {
+      if (axios.isAxiosError(err) && typeof err.response?.data?.error === 'string') {
         setError(err.response.data.error);
       } else {
         setError('Не вдалося створити замовлення. Спробуйте пізніше.');
       }
+      tgHaptic.notification('error');
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [
+    apiUrl,
+    cart,
+    isShippingOrder,
+    locationId,
+    onSuccess,
+    paymentMethod,
+    pickupMinutes,
+    shippingAddress,
+    shippingPhone,
+    comment,
+    submitting,
+    telegramId,
+    tgHaptic,
+    webApp,
+  ]);
+
+  useEffect(() => {
+    MainButton.setParams({
+      text: submitting ? 'Оформлюємо...' : 'Оформити замовлення',
+      color: '#00D4AA',
+      is_active: !submitting && cart.length > 0,
+    });
+
+    if (cart.length > 0) {
+      MainButton.show();
+      MainButton.onClick(handleCheckout);
+    } else {
+      MainButton.hide();
+    }
+
+    return () => {
+      MainButton.offClick(handleCheckout);
+      MainButton.hide();
+    };
+  }, [MainButton, cart.length, handleCheckout, submitting]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
@@ -83,7 +125,6 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
         className="w-full max-w-md rounded-t-3xl p-6 max-h-[85vh] overflow-y-auto animate-slide-up"
         style={{ backgroundColor: theme.bgColor }}
       >
-        {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold" style={{ color: theme.textColor }}>
             Оформлення замовлення
@@ -97,13 +138,11 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
           </button>
         </div>
 
-        {/* Location */}
         <div className="mb-4 p-3 rounded-xl" style={{ backgroundColor: theme.secondaryBgColor }}>
           <p className="text-xs" style={{ color: theme.hintColor }}>Локація</p>
           <p className="font-medium text-sm" style={{ color: theme.textColor }}>📍 {locationName}</p>
         </div>
 
-        {/* Order items */}
         <div className="mb-4">
           <p className="text-xs mb-2 font-medium" style={{ color: theme.hintColor }}>Замовлення</p>
           {cart.map(item => (
@@ -124,7 +163,6 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
           </div>
         </div>
 
-        {/* Pickup time or shipping info */}
         {!isShippingOrder ? (
           <div className="mb-4">
             <p className="text-xs mb-2 font-medium" style={{ color: theme.hintColor }}>Час готовності</p>
@@ -166,7 +204,22 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
           </div>
         )}
 
-        {/* Payment method */}
+        <div className="mb-4">
+          <p className="text-xs mb-2 font-medium" style={{ color: theme.hintColor }}>Коментар до замовлення</p>
+          <textarea
+            value={comment}
+            onChange={(event) => setComment(event.target.value)}
+            placeholder="Наприклад: рослинне молоко — вівсяне, сироп — ваніль"
+            className="w-full rounded-xl px-3 py-2 text-sm min-h-[88px] resize-none"
+            style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
+            maxLength={500}
+          />
+          <p className="mt-1 text-[11px]" style={{ color: theme.hintColor }}>
+            {comment.length}/500
+          </p>
+        </div>
+
+
         <div className="mb-6">
           <p className="text-xs mb-2 font-medium" style={{ color: theme.hintColor }}>Спосіб оплати</p>
           <div className="space-y-2">
@@ -199,27 +252,15 @@ export function Checkout({ apiUrl, cart, telegramId, locationId, locationName, t
           </div>
         </div>
 
-        {/* Error */}
         {error && (
           <div className="mb-4 p-3 rounded-xl text-center text-sm" style={{ backgroundColor: '#FEF2F2', color: '#DC2626' }}>
             {error}
           </div>
         )}
 
-        {/* Auto-cancel notice */}
-        <div className="mb-4 p-3 rounded-xl text-center text-xs" style={{ backgroundColor: theme.secondaryBgColor, color: theme.hintColor }}>
-          ⚠️ Якщо бариста не підтвердить замовлення протягом 1 хв, воно буде автоматично скасоване.
-        </div>
-
-        {/* Submit button */}
-        <button
-          onClick={handleSubmit}
-          disabled={submitting || cart.length === 0}
-          className="w-full py-4 rounded-2xl font-bold text-base transition-all active:scale-[0.98] disabled:opacity-60"
-          style={{ backgroundColor: theme.buttonColor, color: theme.buttonTextColor }}
-        >
-          {submitting ? 'Оформлюємо...' : `Замовити — ${total} грн`}
-        </button>
+        <p className="text-xs text-center" style={{ color: theme.hintColor }}>
+          Підтвердь замовлення через кнопку Telegram внизу екрана.
+        </p>
       </div>
     </div>
   );

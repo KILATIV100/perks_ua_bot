@@ -1,13 +1,17 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import axios from 'axios';
-import WebApp from '@twa-dev/sdk';
 import { WheelOfFortune } from './components/WheelOfFortune';
 import { Menu, CartItem } from './components/Menu';
 import { Radio } from './components/Radio';
 import { TicTacToe } from './components/TicTacToe';
 import { Checkout } from './components/Checkout';
+import { LiveFeed } from './components/LiveFeed';
+import { CoffeeDna } from './components/CoffeeDna';
+import { SecretDrink } from './components/SecretDrink';
+import { useTelegram } from './hooks/useTelegram';
+import { PerkyJump3D } from './components/PerkyJump3D';
 
-type TabType = 'locations' | 'menu' | 'shop' | 'games' | 'bonuses';
+type TabType = 'locations' | 'menu' | 'shop' | 'live' | 'games' | 'bonuses';
 
 const resolveApiUrl = () => {
   const params = new URLSearchParams(window.location.search);
@@ -68,10 +72,12 @@ function App() {
   const [showTerms, setShowTerms] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [gameMode] = useState<'online' | 'offline'>('offline');
-  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe'>('tic_tac_toe');
+  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe' | 'perky_jump_3d'>('tic_tac_toe');
   const [isGameFullscreen, setIsGameFullscreen] = useState(false);
   const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
+  const { webApp, user: twaUser } = useTelegram();
+
   const [redeemState, setRedeemState] = useState<{
     loading: boolean;
     code: string | null;
@@ -80,19 +86,19 @@ function App() {
   }>({ loading: false, code: null, expiresAt: null, error: null });
 
   const theme = useMemo(() => {
-    const params = WebApp.themeParams;
+    const params = webApp.themeParams || {};
     return {
-      bgColor: params.bg_color || '#ffffff',
-      textColor: params.text_color || '#000000',
-      hintColor: params.hint_color || '#999999',
-      buttonColor: params.button_color || '#8B5A2B',
-      buttonTextColor: params.button_text_color || '#ffffff',
-      secondaryBgColor: params.secondary_bg_color || '#f5f5f5',
+      bgColor: params.bg_color || '#1a0a00',
+      textColor: params.text_color || '#FFF8F0',
+      hintColor: params.hint_color || 'rgba(255, 248, 240, 0.6)',
+      buttonColor: params.button_color || '#F4A623',
+      buttonTextColor: params.button_text_color || '#1a0a00',
+      secondaryBgColor: params.secondary_bg_color || '#2d1812',
     };
-  }, []);
+  }, [webApp]);
 
   const telegramUser = useMemo(() => {
-    const user = WebApp.initDataUnsafe?.user;
+    const user = twaUser;
     if (user) return { id: user.id, firstName: user.first_name, username: user.username };
     const params = new URLSearchParams(window.location.search);
     const id = params.get('telegramId');
@@ -104,9 +110,9 @@ function App() {
       };
     }
     return null;
-  }, []);
+  }, [twaUser]);
 
-  const startParam = useMemo(() => WebApp.initDataUnsafe?.start_param, []);
+  const startParam = useMemo(() => webApp.initDataUnsafe?.start_param, [webApp]);
   const referralId = useMemo(() => {
     if (startParam?.startsWith('ref_')) {
       return startParam.replace('ref_', '');
@@ -115,20 +121,22 @@ function App() {
   }, [startParam]);
 
   useEffect(() => {
-    WebApp.ready();
-    WebApp.expand();
+    webApp.ready();
+    webApp.expand();
+    webApp.setHeaderColor('bg_color');
+    webApp.setBackgroundColor('bg_color');
     if (!telegramUser) {
       setLoading(false);
     }
     syncUser();
     fetchLocations();
-  }, [telegramUser]);
+  }, [telegramUser, webApp]);
 
   const syncUser = async () => {
     if (!telegramUser) return;
     try {
       // Try JWT auth via Telegram initData first
-      const initData = WebApp.initData;
+      const initData = webApp.initData;
       if (initData) {
         try {
           const { data } = await axios.post(`${API_URL}/api/auth/telegram`, {
@@ -269,25 +277,30 @@ function App() {
     }
   }, [telegramUser]);
 
-  if (loading) return <div className="p-20 text-center">Завантаження...</div>;
+  if (loading) return <div className="p-20 text-center text-[#FFF8F0] bg-[#1a0a00] min-h-screen">Завантаження...</div>;
 
   return (
-    <div className="min-h-screen pb-20" style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}>
-      <header className="p-4 sticky top-0 z-10 shadow-sm" style={{ backgroundColor: theme.bgColor }}>
+    <div className="min-h-screen pb-24 bg-[#1a0a00] text-[#FFF8F0] relative overflow-hidden" style={{ color: theme.textColor }}>
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-0 left-1/4 w-80 h-80 bg-[#F4A623]/10 rounded-full blur-3xl" />
+        <div className="absolute bottom-10 right-0 w-72 h-72 bg-[#00D4AA]/10 rounded-full blur-3xl" />
+      </div>
+
+      <header className="p-4 sticky top-0 z-10 border-b border-[#F4A623]/20 backdrop-blur-xl bg-[#1a0a00]/80">
         <div className="flex justify-between items-center">
-          <h1 className="text-xl font-bold">PerkUp</h1>
+          <h1 className="text-2xl font-bold tracking-wide text-[#F4A623]">PerkUP</h1>
           <div className="text-right">
             <p className="text-xs" style={{ color: theme.hintColor }}>Мій баланс</p>
-            <p className="font-bold text-[#FFB300]">{appUser?.points || 0} балів</p>
+            <p className="font-bold text-[#F4A623]">{appUser?.points || 0} балів</p>
           </div>
         </div>
       </header>
 
-      <main className="p-4">
+      <main className="p-4 relative z-10">
         {activeTab === 'locations' && (
           <div className="grid gap-4">
             {locations.map(loc => (
-              <div key={loc.id} className="p-4 rounded-2xl shadow-sm" style={{ backgroundColor: theme.bgColor }} onClick={() => { setSelectedLocation(loc); setActiveTab('menu'); }}>
+              <div key={loc.id} className="p-4 rounded-2xl shadow-sm border border-[#F4A623]/20 bg-[#3E2723]/60" onClick={() => { setSelectedLocation(loc); setActiveTab('menu'); }}>
                 <h3 className="font-bold">{loc.name}</h3>
                 <p className="text-sm" style={{ color: theme.hintColor }}>{loc.address}</p>
               </div>
@@ -345,6 +358,14 @@ function App() {
           </>
         )}
 
+        {activeTab === 'live' && (
+          <div className="space-y-4">
+            <SecretDrink apiUrl={API_URL} theme={theme} />
+            <LiveFeed apiUrl={API_URL} theme={theme} />
+            <CoffeeDna apiUrl={API_URL} telegramId={telegramUser?.id} theme={theme} />
+          </div>
+        )}
+
         {activeTab === 'games' && (
           <div className="space-y-6">
             <div className="p-4 rounded-2xl" style={{ backgroundColor: theme.bgColor }}>
@@ -367,12 +388,37 @@ function App() {
                   <span>❌⭕</span>
                   <span className="truncate">Хрестики-нулики</span>
                 </button>
+                <button
+                  onClick={() => {
+                    setFunZoneGame('perky_jump_3d');
+                    setIsGameFullscreen(true);
+                  }}
+                  className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
+                  style={{
+                    background: 'linear-gradient(135deg, #6F4E37, #D4A574)',
+                    color: '#1a0a00',
+                  }}
+                >
+                  <span>☕</span>
+                  <span className="truncate">Perky Jump 3D</span>
+                </button>
               </div>
             </div>
 
             <Radio theme={theme} apiUrl={API_URL} telegramId={telegramUser?.id} userRole={appUser?.role} />
 
-            {isGameFullscreen && (
+            {isGameFullscreen && funZoneGame === 'perky_jump_3d' && (
+              <PerkyJump3D
+                telegramId={telegramUser ? String(telegramUser.id) : undefined}
+                apiUrl={API_URL}
+                onPointsEarned={(pts) => {
+                  setAppUser((prev: any) => prev ? { ...prev, points: (prev.points || 0) + pts } : prev);
+                }}
+                onClose={() => setIsGameFullscreen(false)}
+              />
+            )}
+
+            {isGameFullscreen && funZoneGame === 'tic_tac_toe' && (
               <div className="fixed inset-0 z-50 flex flex-col" style={{ backgroundColor: theme.bgColor }}>
                 <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: `${theme.hintColor}30` }}>
                   <h3 className="font-semibold" style={{ color: theme.textColor }}>
@@ -387,21 +433,19 @@ function App() {
                   </button>
                 </div>
                 <div className="flex-1 overflow-hidden p-4" style={{ overscrollBehavior: 'none' }}>
-                  {funZoneGame === 'tic_tac_toe' && (
-                    telegramUser ? (
-                      <TicTacToe
-                        theme={theme}
-                        mode={gameMode}
-                      />
-                    ) : (
-                      <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
-                        <p className="text-sm" style={{ color: theme.hintColor }}>
-                          Потрібен Telegram акаунт, щоб запускати онлайн-ігри.
-                        </p>
-                      </div>
-                    )
+                  {telegramUser ? (
+                    <TicTacToe
+                      theme={theme}
+                      mode={gameMode}
+                    />
+                  ) : (
+                    <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
+                      <p className="text-sm" style={{ color: theme.hintColor }}>
+                        Потрібен Telegram акаунт, щоб запускати онлайн-ігри.
+                      </p>
+                    </div>
                   )}
-               </div>
+                </div>
               </div>
             )}
           </div>
@@ -496,17 +540,18 @@ function App() {
         </div>
       )}
 
-      <nav className="fixed bottom-0 left-0 right-0 border-t flex justify-around p-2 z-20" style={{ backgroundColor: theme.bgColor }}>
+      <nav className="fixed bottom-0 left-0 right-0 border-t border-[#F4A623]/20 flex justify-around p-2 z-20 backdrop-blur-xl bg-[#1a0a00]/85">
         {[
           { id: 'locations', icon: '📍', label: 'Точки' },
           { id: 'menu', icon: '☕', label: 'Меню' },
           { id: 'shop', icon: '🛒', label: 'Shop' },
+          { id: 'live', icon: '📡', label: 'Live' },
           { id: 'games', icon: '🎮', label: 'Fun Zone' },
           { id: 'bonuses', icon: '🎁', label: 'Бонуси' }
         ].map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id as TabType)} className="flex flex-col items-center p-1">
             <span className="text-xl">{t.icon}</span>
-            <span className="text-[10px]" style={{ color: activeTab === t.id ? theme.buttonColor : theme.hintColor }}>{t.label}</span>
+            <span className="text-[10px]" style={{ color: activeTab === t.id ? '#F4A623' : theme.hintColor }}>{t.label}</span>
           </button>
         ))}
       </nav>

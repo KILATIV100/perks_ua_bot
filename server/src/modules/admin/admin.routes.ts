@@ -22,6 +22,7 @@ import { z } from 'zod';
 import { requireAuth, requireAdmin, requireOwner, type JwtPayload } from '../../shared/jwt.js';
 import { sendTelegramMessage } from '../../shared/utils/telegram.js';
 import { redis } from '../../shared/redis.js';
+import { PosterService } from '../poster/poster.service.js';
 
 const OWNER_TELEGRAM_ID = process.env.OWNER_TELEGRAM_ID || '7363233852';
 const OWNER_CHAT_ID = process.env.OWNER_CHAT_ID || OWNER_TELEGRAM_ID;
@@ -37,7 +38,7 @@ const verifyCodeSchema = z.object({
 
 const setRoleSchema = z.object({
   targetTelegramId: z.union([z.number(), z.string()]).transform(String),
-  newRole: z.enum(['USER', 'ADMIN', 'OWNER']),
+  newRole: z.enum(['USER', 'BARISTA', 'ADMIN', 'OWNER']),
   // Legacy support
   requesterId: z.union([z.number(), z.string()]).transform(String).optional(),
 });
@@ -122,8 +123,8 @@ export async function adminModuleRoutes(
       const body = verifyCodeSchema.parse(request.body);
       const admin = await resolveAdmin(request, app.prisma);
 
-      if (!admin || (admin.role !== 'ADMIN' && admin.role !== 'OWNER')) {
-        return reply.status(403).send({ error: 'FORBIDDEN', message: 'Тільки адмін або власник може верифікувати коди.' });
+      if (!admin || (admin.role !== 'BARISTA' && admin.role !== 'ADMIN' && admin.role !== 'OWNER')) {
+        return reply.status(403).send({ error: 'FORBIDDEN', message: 'Тільки баріста, адмін або власник може верифікувати коди.' });
       }
 
       // Find the code
@@ -235,6 +236,26 @@ export async function adminModuleRoutes(
     }
   });
 
+
+  // ────────────────────────────────────────────────────────────────────────
+  // POST /api/admin/sync-menu — sync categories/products from Poster
+  // ────────────────────────────────────────────────────────────────────────
+  app.post('/sync-menu', async (request, reply) => {
+    try {
+      const admin = await resolveAdmin(request, app.prisma);
+      if (!admin || (admin.role !== 'ADMIN' && admin.role !== 'OWNER')) {
+        return reply.status(403).send({ error: 'FORBIDDEN' });
+      }
+
+      const posterService = new PosterService(app.prisma);
+      const result = await posterService.syncMenu();
+      return reply.send({ success: true, ...result });
+    } catch (error) {
+      app.log.error({ err: error }, 'Admin sync menu error');
+      return reply.status(500).send({ error: 'SYNC_MENU_FAILED' });
+    }
+  });
+
   // ────────────────────────────────────────────────────────────────────────
   // GET /api/admin/stats — 24h analytics (Owner only)
   // ────────────────────────────────────────────────────────────────────────
@@ -287,6 +308,7 @@ export async function adminModuleRoutes(
 
       return reply.send({
         role: user?.role || 'USER',
+        isBarista: user?.role === 'BARISTA',
         isAdmin: user?.role === 'ADMIN' || user?.role === 'OWNER',
         isOwner: user?.role === 'OWNER',
       });
@@ -307,7 +329,7 @@ export async function adminModuleRoutes(
       }
 
       const admins = await app.prisma.user.findMany({
-        where: { role: { in: ['ADMIN', 'OWNER'] } },
+        where: { role: { in: ['BARISTA', 'ADMIN', 'OWNER'] } },
         select: { id: true, telegramId: true, username: true, firstName: true, role: true, createdAt: true },
         orderBy: { createdAt: 'asc' },
       });

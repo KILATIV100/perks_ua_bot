@@ -39,6 +39,7 @@ const CATEGORY_ICONS: Record<string, string> = {
   'Холодні напої': '🧊',
   'Не кава': '🍵',
   'Їжа': '🍔',
+  'Добавки': '➕',
   'Кава на продаж': '📦',
   'Мерч': '👕',
 };
@@ -108,7 +109,7 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true, lo
     return baseProducts.filter(p => p.type === 'MENU');
   }, [products, mode, isMarkMall]);
 
-  const CATEGORY_ORDER = ['Кава', 'Холодні напої', 'Не кава', 'Їжа', 'Кава на продаж', 'Мерч'];
+  const CATEGORY_ORDER = ['Кава', 'Холодні напої', 'Не кава', 'Добавки', 'Їжа', 'Кава на продаж', 'Мерч'];
 
   const categories = useMemo(() => {
     const cats = new Set<string>();

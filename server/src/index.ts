@@ -2,15 +2,24 @@
  * Server Entry Point — PerkUp v2.0 Modular Monolith
  *
  * Module layout:
- *   modules/auth/       — Telegram initData validation + JWT tokens
- *   modules/loyalty/    — Wheel of Fortune, points, redemption codes
- *   modules/orders/     — Cart, orders, state machine
- *   modules/games/      — TIC_TAC_TOE (online + AI), PERKY_JUMP
- *   modules/products/   — Menu, categories
- *   modules/admin/      — Admin panel API, code verification, stats
- *   modules/referral/   — Referral links & stats
- *   modules/radio/      — Playlist, likes
- *   shared/             — PrismaClient, Redis, JWT, timezone utils, Telegram utils
+ *   modules/auth/           — Telegram initData validation + JWT tokens
+ *   modules/loyalty/        — Wheel of Fortune, points, redemption codes
+ *   modules/orders/         — Cart, orders, state machine
+ *   modules/games/          — TIC_TAC_TOE (online + AI), PERKY_JUMP, COFFEE_RUNNER
+ *   modules/products/       — Menu, categories
+ *   modules/admin/          — Admin panel API, code verification, stats
+ *   modules/referral/       — Referral links & stats
+ *   modules/radio/          — Playlist, likes, voting
+ *   modules/poster/         — Poster POS API integration, webhooks, menu sync
+ *   modules/battles/        — Coffee battles between users + location battles
+ *   modules/subscriptions/  — Morning subscription "Ранок за розкладом"
+ *   modules/points-log/     — Points audit trail
+ *   modules/challenges/     — AI-powered daily challenges
+ *   modules/live-feed/      — Real-time order activity stream (WebSocket)
+ *   modules/secret-drink/   — Secret drink of the day
+ *   modules/weather/        — Weather-based drink recommendations
+ *   modules/horoscope/      — AI-generated coffee horoscope
+ *   shared/                 — PrismaClient, Redis, JWT, timezone utils, Telegram utils
  */
 
 import Fastify from 'fastify';
@@ -31,6 +40,17 @@ import { orderRoutes as orderModuleRoutes } from './modules/orders/orders.routes
 import { adminModuleRoutes } from './modules/admin/admin.routes.js';
 import { referralRoutes } from './modules/referral/referral.routes.js';
 import { radioRoutes } from './modules/radio/radio.routes.js';
+import { posterRoutes } from './modules/poster/poster.routes.js';
+import { PosterService } from './modules/poster/poster.service.js';
+import { battleRoutes } from './modules/battles/battles.routes.js';
+import { subscriptionRoutes } from './modules/subscriptions/subscriptions.routes.js';
+import { pointsLogRoutes } from './modules/points-log/points-log.routes.js';
+import { challengeRoutes } from './modules/challenges/challenges.routes.js';
+import { liveFeedRoutes } from './modules/live-feed/live-feed.routes.js';
+import { secretDrinkRoutes } from './modules/secret-drink/secret-drink.routes.js';
+import { weatherRoutes } from './modules/weather/weather.routes.js';
+import { horoscopeRoutes } from './modules/horoscope/horoscope.routes.js';
+import { webhooksRoutes } from './modules/webhooks/webhooks.routes.js';
 
 // ── Legacy routes (kept during migration) ────────────────────────────────────
 import { orderRoutes as legacyOrderRoutes } from './routes/orders.js';
@@ -89,6 +109,16 @@ app.register(orderModuleRoutes, { prefix: '/api/orders' });
 app.register(adminModuleRoutes, { prefix: '/api/admin' });
 app.register(referralRoutes, { prefix: '/api/referral' });
 app.register(radioRoutes, { prefix: '/api/radio' });
+app.register(posterRoutes, { prefix: '/api/poster' });
+app.register(battleRoutes, { prefix: '/api/battles' });
+app.register(subscriptionRoutes, { prefix: '/api/subscriptions' });
+app.register(pointsLogRoutes, { prefix: '/api/points-log' });
+app.register(challengeRoutes, { prefix: '/api/challenges' });
+app.register(liveFeedRoutes, { prefix: '/api/live-feed' });
+app.register(secretDrinkRoutes, { prefix: '/api/secret-drink' });
+app.register(weatherRoutes, { prefix: '/api/weather' });
+app.register(horoscopeRoutes, { prefix: '/api/horoscope' });
+app.register(webhooksRoutes, { prefix: '/api/webhooks' });
 
 // ── Legacy routes (backward compat — remove once all clients migrated) ───────
 app.register(legacyUserRoutes, { prefix: '/api/user' });
@@ -112,35 +142,14 @@ async function ensureOwnerExists(): Promise<void> {
 async function autoSeedLocations(): Promise<void> {
   console.log('[AutoSeed] Syncing locations...');
 
-  const kronaLocation = seedLocations.find((location) => location.slug === 'zhk-krona-park-2');
-  if (!kronaLocation) {
-    throw new Error('Location seed "zhk-krona-park-2" is missing');
-  }
+  // Slugs that existed in older versions but are no longer in the seed
+  const legacySlugsToRemove = ['zhk-krona-park-2', 'zhk-lisovyi-kvartal'];
 
   await prisma.$transaction(async (tx) => {
-    const legacySlug = 'zhk-lisovyi-kvartal';
-    const legacyLocation = await tx.location.findUnique({ where: { slug: legacySlug } });
-    const kronaRecord = await tx.location.findUnique({ where: { slug: kronaLocation.slug } });
-
-    if (legacyLocation && !kronaRecord) {
-      await tx.location.update({
-        where: { slug: legacySlug },
-        data: {
-          slug: kronaLocation.slug,
-          name: kronaLocation.name,
-          address: kronaLocation.address,
-          latitude: kronaLocation.latitude,
-          longitude: kronaLocation.longitude,
-          hasOrdering: kronaLocation.hasOrdering,
-          isViewOnly: kronaLocation.isViewOnly,
-          isActive: kronaLocation.isActive,
-        },
-      });
-    }
-
-    if (legacyLocation && kronaRecord) {
-      await tx.location.delete({ where: { slug: legacySlug } });
-    }
+    // Remove stale legacy locations that are no longer in the seed
+    await tx.location.deleteMany({
+      where: { slug: { in: legacySlugsToRemove } },
+    });
 
     for (const loc of seedLocations) {
       await tx.location.upsert({
@@ -153,6 +162,7 @@ async function autoSeedLocations(): Promise<void> {
           hasOrdering: loc.hasOrdering,
           isViewOnly: loc.isViewOnly,
           isActive: loc.isActive,
+          ...(loc.posterSpotId !== undefined ? { posterSpotId: loc.posterSpotId } : {}),
         },
         create: loc,
       });
@@ -161,10 +171,36 @@ async function autoSeedLocations(): Promise<void> {
 }
 
 async function autoSeedProducts(): Promise<void> {
-  const count = await prisma.product.count();
-  if (count === 0) {
-    console.log('[AutoSeed] Seeding products...');
-    await prisma.product.createMany({ data: seedProducts });
+  console.log('[AutoSeed] Syncing products...');
+
+  for (const product of seedProducts) {
+    const existing = await prisma.product.findFirst({
+      where: {
+        name: product.name,
+        category: product.category,
+        type: product.type,
+        volume: product.volume,
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      await prisma.product.create({ data: product });
+      continue;
+    }
+
+    await prisma.product.update({
+      where: { id: existing.id },
+      data: {
+        description: product.description,
+        volume: product.volume,
+        price: product.price,
+        category: product.category,
+        type: product.type,
+        imageUrl: product.imageUrl,
+        isActive: true,
+      },
+    });
   }
 }
 
@@ -208,6 +244,20 @@ async function start(): Promise<void> {
     autoSeedLocations().catch((e) => app.log.error(e, '[startup] location seed failed'));
     autoSeedProducts().catch((e) => app.log.error(e, '[startup] product seed failed'));
     autoSeedTracks().catch((e) => app.log.error(e, '[startup] tracks seed failed'));
+
+    // Poll Poster for new transactions every 5 minutes (fallback for accounts without webhooks)
+    if (process.env.POSTER_ACCESS_TOKEN) {
+      const posterService = new PosterService(prisma);
+      const POLL_INTERVAL_MS = 5 * 60 * 1000;
+      setInterval(() => {
+        posterService.pollNewTransactions(10).then((result) => {
+          if (result.processed > 0) {
+            app.log.info(result, '[Poster] Poll: new transactions processed');
+          }
+        }).catch((e) => app.log.error(e, '[Poster] Poll failed'));
+      }, POLL_INTERVAL_MS);
+      app.log.info('[Poster] Transaction polling started (every 5 min)');
+    }
   } catch (err) {
     app.log.error(err);
     process.exit(1);
