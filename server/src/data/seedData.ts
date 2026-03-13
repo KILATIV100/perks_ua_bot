@@ -9,6 +9,7 @@ export interface LocationSeed {
   hasOrdering: boolean;
   isViewOnly: boolean;
   isActive: boolean;
+  posterSpotId?: number;
 }
 
 export const seedLocations: LocationSeed[] = [
@@ -31,6 +32,7 @@ export const seedLocations: LocationSeed[] = [
     hasOrdering: true,
     isViewOnly: false,
     isActive: true,
+    posterSpotId: 1,
   },
   {
     slug: 'krona-park',

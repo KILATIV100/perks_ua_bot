@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+// Import the game HTML as raw text to avoid Vite SPA routing intercepting the request
+import gameHtml from '../../public/games/perky-jump-3d.html?raw';
 
 const CLIENT_SALT = import.meta.env.VITE_GAME_SALT ?? 'perkie-default-salt-change-me';
 
@@ -31,6 +33,16 @@ export function PerkyJump3D({ telegramId, apiUrl, onPointsEarned, onClose }: Per
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [lastResult, setLastResult] = useState<{ pointsAwarded: number; limitReached: boolean } | null>(null);
+
+  // Create a blob URL from the raw HTML so Vite's SPA fallback never intercepts it
+  const blobUrl = useMemo(() => {
+    const blob = new Blob([gameHtml], { type: 'text/html' });
+    return URL.createObjectURL(blob);
+  }, []);
+
+  useEffect(() => {
+    return () => URL.revokeObjectURL(blobUrl);
+  }, [blobUrl]);
 
   const submitScore = useCallback(async (payload: GameOverMessage) => {
     if (!telegramId || !apiUrl) return;
@@ -117,14 +129,14 @@ export function PerkyJump3D({ telegramId, apiUrl, onPointsEarned, onClose }: Per
         </div>
       </div>
 
-      {/* Game iframe */}
+      {/* Game iframe loaded via blob URL — bypasses Vite SPA routing */}
       <iframe
         ref={iframeRef}
-        src="/games/perky-jump-3d.html"
+        src={blobUrl}
         className="flex-1 w-full border-0"
         title="Perky Coffee Jump 3D"
         allow="accelerometer; gyroscope; vibrate"
-        sandbox="allow-scripts allow-same-origin"
+        sandbox="allow-scripts"
       />
     </div>
   );
