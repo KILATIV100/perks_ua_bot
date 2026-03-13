@@ -41,6 +41,7 @@ import { adminModuleRoutes } from './modules/admin/admin.routes.js';
 import { referralRoutes } from './modules/referral/referral.routes.js';
 import { radioRoutes } from './modules/radio/radio.routes.js';
 import { posterRoutes } from './modules/poster/poster.routes.js';
+import { PosterService } from './modules/poster/poster.service.js';
 import { battleRoutes } from './modules/battles/battles.routes.js';
 import { subscriptionRoutes } from './modules/subscriptions/subscriptions.routes.js';
 import { pointsLogRoutes } from './modules/points-log/points-log.routes.js';
@@ -243,6 +244,20 @@ async function start(): Promise<void> {
     autoSeedLocations().catch((e) => app.log.error(e, '[startup] location seed failed'));
     autoSeedProducts().catch((e) => app.log.error(e, '[startup] product seed failed'));
     autoSeedTracks().catch((e) => app.log.error(e, '[startup] tracks seed failed'));
+
+    // Poll Poster for new transactions every 5 minutes (fallback for accounts without webhooks)
+    if (process.env.POSTER_ACCESS_TOKEN) {
+      const posterService = new PosterService(prisma);
+      const POLL_INTERVAL_MS = 5 * 60 * 1000;
+      setInterval(() => {
+        posterService.pollNewTransactions(10).then((result) => {
+          if (result.processed > 0) {
+            app.log.info(result, '[Poster] Poll: new transactions processed');
+          }
+        }).catch((e) => app.log.error(e, '[Poster] Poll failed'));
+      }, POLL_INTERVAL_MS);
+      app.log.info('[Poster] Transaction polling started (every 5 min)');
+    }
   } catch (err) {
     app.log.error(err);
     process.exit(1);

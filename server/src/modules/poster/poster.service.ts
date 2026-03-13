@@ -280,6 +280,61 @@ export class PosterService {
     return { categoriesSynced, productsSynced, errors };
   }
 
+  /**
+   * Poll Poster for transactions in the last N minutes and award points
+   * for any that haven't been processed yet. Used instead of webhooks
+   * when the Poster account doesn't have webhook configuration available.
+   */
+  async pollNewTransactions(lookbackMinutes = 10): Promise<{ processed: number; skipped: number; errors: number }> {
+    if (!POSTER_ACCESS_TOKEN) return { processed: 0, skipped: 0, errors: 0 };
+
+    const now = Math.floor(Date.now() / 1000);
+    const from = now - lookbackMinutes * 60;
+
+    let processed = 0;
+    let skipped = 0;
+    let errors = 0;
+
+    try {
+      const url = this.buildUrl('dash.getTransactions', {
+        date_from: String(from),
+        date_to: String(now),
+      });
+      const res = await fetch(url);
+      const data = await res.json() as { response?: PosterTransaction[] };
+      const transactions = data.response || [];
+
+      for (const tx of transactions) {
+        try {
+          // Skip if already recorded
+          const existing = await this.prisma.order.findFirst({
+            where: { posterTransactionId: tx.transaction_id },
+            select: { id: true },
+          });
+          if (existing) { skipped++; continue; }
+
+          // Process same as webhook
+          const result = await this.processTransactionWebhook({
+            account: '',
+            object: 'transaction',
+            object_id: tx.transaction_id,
+            action: 'added',
+          });
+
+          if (result.success) processed++;
+          else skipped++;
+        } catch {
+          errors++;
+        }
+      }
+    } catch (err) {
+      console.error('[Poster] Poll failed:', err);
+      errors++;
+    }
+
+    return { processed, skipped, errors };
+  }
+
   async processTransactionWebhook(payload: {
     account: string;
     object: string;
