@@ -141,7 +141,15 @@ async function ensureOwnerExists(): Promise<void> {
 async function autoSeedLocations(): Promise<void> {
   console.log('[AutoSeed] Syncing locations...');
 
+  // Slugs that existed in older versions but are no longer in the seed
+  const legacySlugsToRemove = ['zhk-krona-park-2', 'zhk-lisovyi-kvartal'];
+
   await prisma.$transaction(async (tx) => {
+    // Remove stale legacy locations that are no longer in the seed
+    await tx.location.deleteMany({
+      where: { slug: { in: legacySlugsToRemove } },
+    });
+
     for (const loc of seedLocations) {
       await tx.location.upsert({
         where: { slug: loc.slug },

@@ -136,7 +136,7 @@ export function PerkyJump3D({ telegramId, apiUrl, onPointsEarned, onClose }: Per
         className="flex-1 w-full border-0"
         title="Perky Coffee Jump 3D"
         allow="accelerometer; gyroscope; vibrate"
-        sandbox="allow-scripts"
+        sandbox="allow-scripts allow-same-origin"
       />
     </div>
   );
