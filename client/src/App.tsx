@@ -9,6 +9,7 @@ import { LiveFeed } from './components/LiveFeed';
 import { CoffeeDna } from './components/CoffeeDna';
 import { SecretDrink } from './components/SecretDrink';
 import { useTelegram } from './hooks/useTelegram';
+import { PerkyJump3D } from './components/PerkyJump3D';
 
 type TabType = 'locations' | 'menu' | 'shop' | 'live' | 'games' | 'bonuses';
 
@@ -71,7 +72,7 @@ function App() {
   const [showTerms, setShowTerms] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [gameMode] = useState<'online' | 'offline'>('offline');
-  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe'>('tic_tac_toe');
+  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe' | 'perky_jump_3d'>('tic_tac_toe');
   const [isGameFullscreen, setIsGameFullscreen] = useState(false);
   const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
@@ -387,12 +388,37 @@ function App() {
                   <span>❌⭕</span>
                   <span className="truncate">Хрестики-нулики</span>
                 </button>
+                <button
+                  onClick={() => {
+                    setFunZoneGame('perky_jump_3d');
+                    setIsGameFullscreen(true);
+                  }}
+                  className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
+                  style={{
+                    background: 'linear-gradient(135deg, #6F4E37, #D4A574)',
+                    color: '#1a0a00',
+                  }}
+                >
+                  <span>☕</span>
+                  <span className="truncate">Perky Jump 3D</span>
+                </button>
               </div>
             </div>
 
             <Radio theme={theme} apiUrl={API_URL} telegramId={telegramUser?.id} userRole={appUser?.role} />
 
-            {isGameFullscreen && (
+            {isGameFullscreen && funZoneGame === 'perky_jump_3d' && (
+              <PerkyJump3D
+                telegramId={telegramUser ? String(telegramUser.id) : undefined}
+                apiUrl={API_URL}
+                onPointsEarned={(pts) => {
+                  setAppUser((prev: any) => prev ? { ...prev, points: (prev.points || 0) + pts } : prev);
+                }}
+                onClose={() => setIsGameFullscreen(false)}
+              />
+            )}
+
+            {isGameFullscreen && funZoneGame === 'tic_tac_toe' && (
               <div className="fixed inset-0 z-50 flex flex-col" style={{ backgroundColor: theme.bgColor }}>
                 <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: `${theme.hintColor}30` }}>
                   <h3 className="font-semibold" style={{ color: theme.textColor }}>
@@ -407,21 +433,19 @@ function App() {
                   </button>
                 </div>
                 <div className="flex-1 overflow-hidden p-4" style={{ overscrollBehavior: 'none' }}>
-                  {funZoneGame === 'tic_tac_toe' && (
-                    telegramUser ? (
-                      <TicTacToe
-                        theme={theme}
-                        mode={gameMode}
-                      />
-                    ) : (
-                      <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
-                        <p className="text-sm" style={{ color: theme.hintColor }}>
-                          Потрібен Telegram акаунт, щоб запускати онлайн-ігри.
-                        </p>
-                      </div>
-                    )
+                  {telegramUser ? (
+                    <TicTacToe
+                      theme={theme}
+                      mode={gameMode}
+                    />
+                  ) : (
+                    <div className="p-4 rounded-2xl text-center" style={{ backgroundColor: theme.bgColor }}>
+                      <p className="text-sm" style={{ color: theme.hintColor }}>
+                        Потрібен Telegram акаунт, щоб запускати онлайн-ігри.
+                      </p>
+                    </div>
                   )}
-               </div>
+                </div>
               </div>
             )}
           </div>
