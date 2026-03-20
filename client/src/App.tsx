@@ -9,7 +9,7 @@ import { LiveFeed } from './components/LiveFeed';
 import { CoffeeDna } from './components/CoffeeDna';
 import { SecretDrink } from './components/SecretDrink';
 import { useTelegram } from './hooks/useTelegram';
-import { PerkyJump3D } from './components/PerkyJump3D';
+import { PerkyJump } from './components/PerkyJump';
 
 type TabType = 'locations' | 'menu' | 'shop' | 'live' | 'games' | 'bonuses';
 
@@ -72,7 +72,7 @@ function App() {
   const [showTerms, setShowTerms] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [gameMode] = useState<'online' | 'offline'>('offline');
-  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe' | 'perky_jump_3d'>('tic_tac_toe');
+  const [funZoneGame, setFunZoneGame] = useState<'tic_tac_toe' | 'perky_jump'>('tic_tac_toe');
   const [isGameFullscreen, setIsGameFullscreen] = useState(false);
   const [referralCopied, setReferralCopied] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
@@ -131,6 +131,18 @@ function App() {
     syncUser();
     fetchLocations();
   }, [telegramUser, webApp]);
+
+  useEffect(() => {
+    if (!isGameFullscreen) return;
+    const prevOverflow = document.body.style.overflow;
+    const prevTouchAction = document.body.style.touchAction;
+    document.body.style.overflow = 'hidden';
+    document.body.style.touchAction = 'none';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.body.style.touchAction = prevTouchAction;
+    };
+  }, [isGameFullscreen]);
 
   const syncUser = async () => {
     if (!telegramUser) return;
@@ -390,7 +402,7 @@ function App() {
                 </button>
                 <button
                   onClick={() => {
-                    setFunZoneGame('perky_jump_3d');
+                    setFunZoneGame('perky_jump');
                     setIsGameFullscreen(true);
                   }}
                   className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all"
@@ -400,22 +412,37 @@ function App() {
                   }}
                 >
                   <span>☕</span>
-                  <span className="truncate">Perky Jump 3D</span>
+                  <span className="truncate">Perky Jump</span>
                 </button>
               </div>
             </div>
 
             <Radio theme={theme} apiUrl={API_URL} telegramId={telegramUser?.id} userRole={appUser?.role} />
 
-            {isGameFullscreen && funZoneGame === 'perky_jump_3d' && (
-              <PerkyJump3D
-                telegramId={telegramUser ? String(telegramUser.id) : undefined}
-                apiUrl={API_URL}
-                onPointsEarned={(pts) => {
-                  setAppUser((prev: any) => prev ? { ...prev, points: (prev.points || 0) + pts } : prev);
-                }}
-                onClose={() => setIsGameFullscreen(false)}
-              />
+            {isGameFullscreen && funZoneGame === 'perky_jump' && (
+              <div className="fixed inset-0 z-50 flex flex-col overflow-hidden" style={{ backgroundColor: theme.bgColor, touchAction: 'none' }}>
+                <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: `${theme.hintColor}30` }}>
+                  <h3 className="font-semibold" style={{ color: theme.textColor }}>
+                    Perky Jump
+                  </h3>
+                  <button
+                    onClick={() => setIsGameFullscreen(false)}
+                    className="px-3 py-1 rounded-lg text-sm font-medium"
+                    style={{ backgroundColor: theme.secondaryBgColor, color: theme.textColor }}
+                  >
+                    Закрити
+                  </button>
+                </div>
+                <div className="flex-1 overflow-hidden p-2" style={{ overscrollBehavior: 'none' }}>
+                  <PerkyJump
+                    telegramId={telegramUser ? String(telegramUser.id) : undefined}
+                    apiUrl={API_URL}
+                    onPointsEarned={(pts) => {
+                      setAppUser((prev: any) => prev ? { ...prev, points: (prev.points || 0) + pts } : prev);
+                    }}
+                  />
+                </div>
+              </div>
             )}
 
             {isGameFullscreen && funZoneGame === 'tic_tac_toe' && (

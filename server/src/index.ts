@@ -40,8 +40,6 @@ import { orderRoutes as orderModuleRoutes } from './modules/orders/orders.routes
 import { adminModuleRoutes } from './modules/admin/admin.routes.js';
 import { referralRoutes } from './modules/referral/referral.routes.js';
 import { radioRoutes } from './modules/radio/radio.routes.js';
-import { posterRoutes } from './modules/poster/poster.routes.js';
-import { PosterService } from './modules/poster/poster.service.js';
 import { battleRoutes } from './modules/battles/battles.routes.js';
 import { subscriptionRoutes } from './modules/subscriptions/subscriptions.routes.js';
 import { pointsLogRoutes } from './modules/points-log/points-log.routes.js';
@@ -50,7 +48,6 @@ import { liveFeedRoutes } from './modules/live-feed/live-feed.routes.js';
 import { secretDrinkRoutes } from './modules/secret-drink/secret-drink.routes.js';
 import { weatherRoutes } from './modules/weather/weather.routes.js';
 import { horoscopeRoutes } from './modules/horoscope/horoscope.routes.js';
-import { webhooksRoutes } from './modules/webhooks/webhooks.routes.js';
 
 // ── Legacy routes (kept during migration) ────────────────────────────────────
 import { orderRoutes as legacyOrderRoutes } from './routes/orders.js';
@@ -109,7 +106,6 @@ app.register(orderModuleRoutes, { prefix: '/api/orders' });
 app.register(adminModuleRoutes, { prefix: '/api/admin' });
 app.register(referralRoutes, { prefix: '/api/referral' });
 app.register(radioRoutes, { prefix: '/api/radio' });
-app.register(posterRoutes, { prefix: '/api/poster' });
 app.register(battleRoutes, { prefix: '/api/battles' });
 app.register(subscriptionRoutes, { prefix: '/api/subscriptions' });
 app.register(pointsLogRoutes, { prefix: '/api/points-log' });
@@ -118,7 +114,6 @@ app.register(liveFeedRoutes, { prefix: '/api/live-feed' });
 app.register(secretDrinkRoutes, { prefix: '/api/secret-drink' });
 app.register(weatherRoutes, { prefix: '/api/weather' });
 app.register(horoscopeRoutes, { prefix: '/api/horoscope' });
-app.register(webhooksRoutes, { prefix: '/api/webhooks' });
 
 // ── Legacy routes (backward compat — remove once all clients migrated) ───────
 app.register(legacyUserRoutes, { prefix: '/api/user' });
@@ -245,19 +240,6 @@ async function start(): Promise<void> {
     autoSeedProducts().catch((e) => app.log.error(e, '[startup] product seed failed'));
     autoSeedTracks().catch((e) => app.log.error(e, '[startup] tracks seed failed'));
 
-    // Poll Poster for new transactions every 5 minutes (fallback for accounts without webhooks)
-    if (process.env.POSTER_ACCESS_TOKEN) {
-      const posterService = new PosterService(prisma);
-      const POLL_INTERVAL_MS = 5 * 60 * 1000;
-      setInterval(() => {
-        posterService.pollNewTransactions(10).then((result) => {
-          if (result.processed > 0) {
-            app.log.info(result, '[Poster] Poll: new transactions processed');
-          }
-        }).catch((e) => app.log.error(e, '[Poster] Poll failed'));
-      }, POLL_INTERVAL_MS);
-      app.log.info('[Poster] Transaction polling started (every 5 min)');
-    }
   } catch (err) {
     app.log.error(err);
     process.exit(1);

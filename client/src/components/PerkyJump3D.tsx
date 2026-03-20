@@ -33,6 +33,7 @@ export function PerkyJump3D({ telegramId, apiUrl, onPointsEarned, onClose }: Per
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [lastResult, setLastResult] = useState<{ pointsAwarded: number; limitReached: boolean } | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Create a blob URL from the raw HTML so Vite's SPA fallback never intercepts it
   const blobUrl = useMemo(() => {
@@ -47,6 +48,7 @@ export function PerkyJump3D({ telegramId, apiUrl, onPointsEarned, onClose }: Per
   const submitScore = useCallback(async (payload: GameOverMessage) => {
     if (!telegramId || !apiUrl) return;
     setSubmitting(true);
+    setSubmitError(null);
     try {
       const timestamp = Date.now();
       const hash = await sha256(`${payload.score}${CLIENT_SALT}${timestamp}`);
@@ -65,26 +67,28 @@ export function PerkyJump3D({ telegramId, apiUrl, onPointsEarned, onClose }: Per
         }),
       });
 
-      if (res.ok) {
-        const data = await res.json() as { pointsAwarded?: number; limitReached?: boolean };
-        const result = {
-          pointsAwarded: data.pointsAwarded ?? 0,
-          limitReached: data.limitReached ?? false,
-        };
-        setLastResult(result);
+      const data = await res.json() as { pointsAwarded?: number; limitReached?: boolean; message?: string; error?: string };
+      if (!res.ok) {
+        setSubmitError(data.message || data.error || 'Не вдалося синхронізувати результат');
+        return;
+      }
+      const result = {
+        pointsAwarded: data.pointsAwarded ?? 0,
+        limitReached: data.limitReached ?? false,
+      };
+      setLastResult(result);
 
-        // Notify the game iframe about points result
-        iframeRef.current?.contentWindow?.postMessage(
-          { type: 'PERKY_JUMP_3D_POINTS', ...result },
-          '*',
-        );
+      // Notify the game iframe about points result
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: 'PERKY_JUMP_3D_POINTS', ...result },
+        '*',
+      );
 
-        if (result.pointsAwarded > 0) {
-          onPointsEarned?.(result.pointsAwarded);
-        }
+      if (result.pointsAwarded > 0) {
+        onPointsEarned?.(result.pointsAwarded);
       }
     } catch {
-      // silently ignore network errors
+      setSubmitError('Помилка мережі під час відправки результату');
     } finally {
       setSubmitting(false);
     }
@@ -117,6 +121,11 @@ export function PerkyJump3D({ telegramId, apiUrl, onPointsEarned, onClose }: Per
           {lastResult && !submitting && lastResult.pointsAwarded > 0 && (
             <span className="text-xs font-bold" style={{ color: '#D4A574' }}>
               +{lastResult.pointsAwarded} балів
+            </span>
+          )}
+          {submitError && !submitting && (
+            <span className="text-xs" style={{ color: '#fca5a5' }}>
+              {submitError}
             </span>
           )}
           <button
