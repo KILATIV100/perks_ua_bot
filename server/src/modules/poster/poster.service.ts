@@ -50,6 +50,22 @@ function toNumber(value: string | number | undefined | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function getPosterTokenBySpot(spotId?: number | null): string {
+  if (spotId) {
+    const raw = process.env.POSTER_TOKENS_BY_SPOT;
+    if (raw) {
+      try {
+        const mapping = JSON.parse(raw) as Record<string, string>;
+        const token = mapping[String(spotId)];
+        if (token && token.trim()) return token.trim();
+      } catch {
+        // ignore invalid JSON and fallback to default token
+      }
+    }
+  }
+  return POSTER_ACCESS_TOKEN;
+}
+
 /**
  * Poster can send price as kopiyky integer, decimal hryvnia string, or stringified integer.
  * Keep DB format as integer kopiyky.
@@ -79,8 +95,9 @@ function normalizePosterPriceToKopiyky(price: PosterProduct['price']): number {
 export class PosterService {
   constructor(private prisma: PrismaClient) {}
 
-  private buildUrl(method: string, params: Record<string, string> = {}): string {
-    const query = new URLSearchParams({ token: POSTER_ACCESS_TOKEN, ...params });
+  private buildUrl(method: string, params: Record<string, string> = {}, tokenOverride?: string): string {
+    const token = tokenOverride || POSTER_ACCESS_TOKEN;
+    const query = new URLSearchParams({ token, ...params });
     return `${POSTER_API_URL}/${method}?${query.toString()}`;
   }
 
@@ -353,8 +370,9 @@ export class PosterService {
     }
 
     try {
+      const token = getPosterTokenBySpot(undefined);
       const txResponse = await fetch(
-        `${POSTER_API_URL}/dash.getTransaction?token=${POSTER_ACCESS_TOKEN}&transaction_id=${payload.object_id}`
+        `${POSTER_API_URL}/dash.getTransaction?token=${token}&transaction_id=${payload.object_id}`
       );
       const txData = await txResponse.json() as { response?: PosterTransaction };
       const tx = txData.response;
@@ -449,6 +467,8 @@ export class PosterService {
 
     const spotId = order.location.posterSpotId || Number(process.env.POSTER_SPOT_ID || 0);
     if (!spotId) return { success: false, reason: 'SPOT_ID_MISSING' };
+    const posterToken = getPosterTokenBySpot(spotId);
+    if (!posterToken) return { success: false, reason: 'POSTER_TOKEN_MISSING_FOR_SPOT' };
 
     const products = order.items
       .map((item) => {
@@ -475,7 +495,7 @@ export class PosterService {
       },
     };
 
-    const response = await fetch(`${POSTER_API_URL}/incomingOrders.createIncomingOrder?token=${POSTER_ACCESS_TOKEN}`, {
+    const response = await fetch(`${POSTER_API_URL}/incomingOrders.createIncomingOrder?token=${posterToken}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
