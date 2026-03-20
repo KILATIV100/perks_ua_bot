@@ -174,7 +174,11 @@ model Location {
   isViewOnly  Boolean  @default(false)
   isActive    Boolean  @default(true)
   /// Poster spot_id for this location
-  posterSpotId Int?
+  posterSpotId    Int?
+  /// Poster API access token for this location's account (overrides global POSTER_ACCESS_TOKEN)
+  posterToken     String?
+  /// Poster account name/subdomain (e.g. "mycafe" for mycafe.joinposter.com)
+  posterAccount   String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   orders      Order[]

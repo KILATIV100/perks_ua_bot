@@ -15,6 +15,8 @@
  *   GET    /api/admin/export-users    — Export all users
  *   GET    /api/admin/all-users       — Get all users for broadcast
  *   POST   /api/admin/add-points      — God mode: add points to owner
+ *   POST   /api/admin/set-location-poster — Set per-location Poster token
+ *   GET    /api/admin/locations-poster    — View Poster config for all locations
  */
 
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest } from 'fastify';
@@ -488,5 +490,77 @@ export async function adminModuleRoutes(
       }
       return reply.status(500).send({ error: 'Failed to add points' });
     }
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // POST /api/admin/set-location-poster — Owner sets Poster token per location
+  // Body: { requesterId, locationSlug, posterToken, posterAccount? }
+  // ────────────────────────────────────────────────────────────────────────
+  app.post<{ Body: { requesterId?: string; locationSlug: string; posterToken: string; posterAccount?: string } }>(
+    '/set-location-poster',
+    async (request, reply) => {
+      try {
+        const admin = await resolveAdmin(request, app.prisma);
+        if (!admin || admin.role !== 'OWNER') {
+          return reply.status(403).send({ error: 'Only owner can configure Poster tokens' });
+        }
+
+        const { locationSlug, posterToken, posterAccount } = z.object({
+          locationSlug: z.string().min(1),
+          posterToken: z.string().min(1),
+          posterAccount: z.string().optional(),
+        }).parse(request.body);
+
+        const location = await app.prisma.location.findUnique({ where: { slug: locationSlug } });
+        if (!location) {
+          return reply.status(404).send({ error: `Location '${locationSlug}' not found` });
+        }
+
+        await app.prisma.location.update({
+          where: { slug: locationSlug },
+          data: {
+            posterToken,
+            ...(posterAccount !== undefined ? { posterAccount } : {}),
+          },
+        });
+
+        return reply.send({ success: true, locationSlug, posterAccount: posterAccount ?? location.posterAccount });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: 'Invalid request', details: error.errors });
+        }
+        app.log.error({ err: error }, 'set-location-poster error');
+        return reply.status(500).send({ error: 'Failed to update location Poster token' });
+      }
+    }
+  );
+
+  // ────────────────────────────────────────────────────────────────────────
+  // GET /api/admin/locations-poster — Owner views Poster config for all locations
+  // ────────────────────────────────────────────────────────────────────────
+  app.get('/locations-poster', async (request, reply) => {
+    const admin = await resolveAdmin(request, app.prisma);
+    if (!admin || admin.role !== 'OWNER') {
+      return reply.status(403).send({ error: 'Only owner can view Poster tokens' });
+    }
+
+    const locations = await app.prisma.location.findMany({
+      select: {
+        slug: true,
+        name: true,
+        posterSpotId: true,
+        posterAccount: true,
+        posterToken: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    return reply.send({
+      locations: locations.map((l) => ({
+        ...l,
+        posterToken: l.posterToken ? `${l.posterToken.slice(0, 6)}…` : null, // mask token
+        hasToken: !!l.posterToken,
+      })),
+    });
   });
 }
