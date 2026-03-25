@@ -1460,8 +1460,8 @@ bot.on('message:text', async (ctx) => {
       }
 
       const lines = users.map((u, i) => {
-        const name = u.username ? `@${u.username}` : (u.firstName || `id${u.telegramId}`);
-        return `${i + 1}. ${name} — *${u.points}* балів`;
+        const name = u.username ? `@${u.username}` : (u.firstName || '—');
+        return `${i + 1}. ${name} \`(${u.telegramId})\` — *${u.points}* балів`;
       });
 
       await ctx.reply(
