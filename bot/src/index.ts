@@ -1486,12 +1486,13 @@ bot.on('message:text', async (ctx) => {
 
       const lines = users.map((u, i) => {
         const name = u.username ? `@${u.username}` : (u.firstName || '—');
-        return `${i + 1}. ${name} \`(${u.telegramId})\` — *${u.points}* балів`;
+        const safeName = name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `${i + 1}. ${safeName} <code>(${u.telegramId})</code> — <b>${u.points ?? 0}</b> балів`;
       });
 
       await ctx.reply(
-        `🏆 *Топ ${users.length} по балах*\n\n${lines.join('\n')}`,
-        { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+        `🏆 <b>Топ ${users.length} по балах</b>\n\n${lines.join('\n')}`,
+        { parse_mode: 'HTML', reply_markup: getOwnerKeyboard() }
       );
     } catch {
       await ctx.reply('❌ Помилка завантаження.', { reply_markup: getOwnerKeyboard() });
