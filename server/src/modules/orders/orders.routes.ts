@@ -85,14 +85,22 @@ export async function orderRoutes(
   app: FastifyInstance,
   _opts: FastifyPluginOptions,
 ): Promise<void> {
-
   const notifyAdminsAboutOrder = async (
     message: string,
+    locationId?: string,
     inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>,
   ): Promise<void> => {
     try {
       const admins = await app.prisma.user.findMany({
-        where: { role: { in: ['ADMIN', 'OWNER'] } },
+        where: {
+          OR: [
+            { role: { in: ['ADMIN', 'OWNER'] } },
+            {
+              role: 'BARISTA',
+              ...(locationId ? { preferredLocationId: locationId } : {}),
+            },
+          ],
+        },
         select: { telegramId: true },
       });
 
@@ -228,7 +236,7 @@ export async function orderRoutes(
             const userName = u.firstName || u.username || `ID: ${u.telegramId}`;
             const clarificationNeeded = needsClarification(items.map(i => i.name), comment);
             const adminMsg = `🆕 <b>НОВЕ ЗАМОВЛЕННЯ #${order.orderNumber}</b>\n\n👤 ${userName}\n📍 ${order.location.name}\n💰 <b>${totalPrice} грн</b>\n\n📋 <b>Склад:</b>\n${itemsList}\n\n💬 ${comment || '—'}${clarificationNeeded ? '\n\n❗️ Потрібно уточнення по рослинному молоку/сиропу' : ''}`;
-            await notifyAdminsAboutOrder(adminMsg, [[{ text: '✅ Прийняти в роботу', callback_data: `order_accept:${order.id}` }, { text: '❓ Уточнити', callback_data: `order_clarify:${order.id}` }]]);
+            await notifyAdminsAboutOrder(adminMsg, locationId, [[{ text: '✅ Прийняти в роботу', callback_data: `order_accept:${order.id}` }, { text: '❓ Уточнити', callback_data: `order_clarify:${order.id}` }]]);
             sendTelegramMessage(Number(u.telegramId), `✅ *Замовлення #${order.orderNumber} створено!*\n\n📍 ${order.location.name}\n⏱ Очікуйте ~${pickupTime} хв\n\n⚠️ Якщо бариста не підтвердить замовлення протягом 1 хв, воно буде автоматично скасоване.`).catch(() => {});
 
             scheduleAutoCancel(order.id);
@@ -282,7 +290,7 @@ export async function orderRoutes(
       const itemsList = order.items.map(i => `• ${i.product.name} x${i.quantity}`).join('\n');
       const clarificationNeeded = needsClarification(itemNames, parsed.comment);
       const adminMsg = `🆕 <b>НОВЕ ЗАМОВЛЕННЯ #${order.orderNumber}</b>\n\n👤 ${user?.firstName || ''} (@${user?.username || '—'})\n📍 ${order.location.name}\n⏱ ${parsed.pickupTime} хв\n💳 ${parsed.paymentMethod}\n\n📋 <b>Склад:</b>\n${itemsList}\n\n💬 ${parsed.comment || '—'}${clarificationNeeded ? '\n\n❗️ Потрібно уточнення по рослинному молоку/сиропу' : ''}`;
-      await notifyAdminsAboutOrder(adminMsg, [[{ text: '✅ Прийняти', callback_data: `order_accept:${order.id}` }, { text: '❓ Уточнити', callback_data: `order_clarify:${order.id}` }]]);
+      await notifyAdminsAboutOrder(adminMsg, parsed.locationId, [[{ text: '✅ Прийняти', callback_data: `order_accept:${order.id}` }, { text: '❓ Уточнити', callback_data: `order_clarify:${order.id}` }]]);
       if (userTelegramId) {
         sendTelegramMessage(Number(userTelegramId), `✅ *Замовлення #${order.orderNumber} створено!*\n\n📍 ${order.location.name}\n⏱ Очікуйте ~${parsed.pickupTime} хв\n\n⚠️ Якщо бариста не підтвердить замовлення протягом 1 хв, воно буде автоматично скасоване.`).catch(() => {});
       }

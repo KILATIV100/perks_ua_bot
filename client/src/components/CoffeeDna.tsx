@@ -40,7 +40,12 @@ export function CoffeeDna({ apiUrl, telegramId, theme }: CoffeeDnaProps) {
 
   const fetchDna = async () => {
     try {
-      // For now, use a placeholder — real endpoint will be added
+      const res = await fetch(`${apiUrl}/api/user/dna?telegramId=${telegramId}`);
+      if (!res.ok) throw new Error('Failed to fetch DNA');
+      const data = await res.json() as DnaData;
+      setDna(data);
+    } catch {
+      console.error('Failed to fetch DNA');
       setDna({
         archetype: null,
         archetypeDesc: null,
@@ -51,8 +56,6 @@ export function CoffeeDna({ apiUrl, telegramId, theme }: CoffeeDnaProps) {
         topLocation: null,
         totalOrders: 0,
       });
-    } catch {
-      console.error('Failed to fetch DNA');
     } finally {
       setLoading(false);
     }

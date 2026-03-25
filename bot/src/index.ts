@@ -764,16 +764,41 @@ bot.command('dna', async (ctx) => {
   if (!userId) return;
 
   try {
-    const response = await fetch(`${API_URL}/api/loyalty/balance?telegramId=${userId}`);
+    const response = await fetch(`${API_URL}/api/user/dna?telegramId=${userId}`);
     if (!response.ok) {
       await ctx.reply('❌ Не вдалося отримати дані. Спробуй пізніше.');
       return;
     }
-    // TODO: Implement DNA profile endpoint on server
+    const dna = await response.json() as {
+      archetype: string | null;
+      archetypeDesc: string | null;
+      archetypeRarity: number | null;
+      topDrink: string | null;
+      timePreference: string | null;
+      sugarFree: number | null;
+      topLocation: string | null;
+      totalOrders: number;
+    };
+
+    if (!dna.archetype || dna.totalOrders < 10) {
+      await ctx.reply(
+        `🧬 *Твій кавовий DNA*\n\n` +
+        `Поки що архетип формується.\n` +
+        `Зроби ще *${Math.max(0, 10 - dna.totalOrders)}* замовлень, щоб відкрити свій профіль.`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
     await ctx.reply(
-      '🧬 *Твій кавовий DNA*\n\n' +
-        'Зроби 10+ замовлень щоб розкрити свій кавовий архетип!\n\n' +
-        'Після цього ти зможеш поділитись своїм DNA в сторіс.',
+      `🧬 *Твій кавовий DNA*\n\n` +
+      `*Архетип:* ${dna.archetype}\n` +
+      `${dna.archetypeDesc ? `_${dna.archetypeDesc}_\n` : ''}` +
+      `${dna.topDrink ? `☕ *Улюблений напій:* ${dna.topDrink}\n` : ''}` +
+      `${dna.timePreference ? `🕒 *Ритм:* ${dna.timePreference}\n` : ''}` +
+      `${dna.topLocation ? `📍 *Топ-локація:* ${dna.topLocation}\n` : ''}` +
+      `${dna.sugarFree != null ? `⚡ *Без цукру:* ${dna.sugarFree}%\n` : ''}` +
+      `${dna.archetypeRarity != null ? `\nТаких у мережі лише *${dna.archetypeRarity}%*` : ''}`,
       { parse_mode: 'Markdown' }
     );
   } catch {

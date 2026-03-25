@@ -41,6 +41,7 @@ const verifyCodeSchema = z.object({
 const setRoleSchema = z.object({
   targetTelegramId: z.union([z.number(), z.string()]).transform(String),
   newRole: z.enum(['USER', 'BARISTA', 'ADMIN', 'OWNER']),
+  preferredLocationId: z.string().min(1).optional(),
   // Legacy support
   requesterId: z.union([z.number(), z.string()]).transform(String).optional(),
 });
@@ -361,9 +362,16 @@ export async function adminModuleRoutes(
 
       const targetUser = await app.prisma.user.upsert({
         where: { telegramId: body.targetTelegramId },
-        update: { role: body.newRole },
-        create: { telegramId: body.targetTelegramId, role: body.newRole },
-        select: { id: true, telegramId: true, username: true, firstName: true, role: true },
+        update: {
+          role: body.newRole,
+          preferredLocationId: body.newRole === 'BARISTA' ? (body.preferredLocationId || null) : null,
+        },
+        create: {
+          telegramId: body.targetTelegramId,
+          role: body.newRole,
+          preferredLocationId: body.newRole === 'BARISTA' ? (body.preferredLocationId || null) : null,
+        },
+        select: { id: true, telegramId: true, username: true, firstName: true, role: true, preferredLocationId: true },
       });
 
       return reply.send({ success: true, user: targetUser });
