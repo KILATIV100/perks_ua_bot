@@ -484,6 +484,8 @@ function getOwnerKeyboard(): Keyboard {
     .text('👥 Керування ролями')
     .text('🎵 Додати трек')
     .text('📦 Експорт')
+    .row()
+    .text('🏆 Топ балів')
     .resized();
 }
 
@@ -1439,6 +1441,36 @@ bot.on('message:text', async (ctx) => {
         `🕒 ${exportedTime}`,
       { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
     );
+    return;
+  }
+
+  // Handle "Top Points" button (Owner only)
+  if (text === '🏆 Топ балів' && isOwner) {
+    await ctx.reply('⏳ Завантажую...');
+    try {
+      const response = await fetch(`${API_URL}/api/admin/all-users?requesterId=${userId}`);
+      const data = await response.json() as { users?: Array<{ telegramId: string; firstName?: string; username?: string; points: number }> };
+      const users = (data.users ?? [])
+        .sort((a, b) => b.points - a.points)
+        .slice(0, 30);
+
+      if (users.length === 0) {
+        await ctx.reply('😶 Немає користувачів.', { reply_markup: getOwnerKeyboard() });
+        return;
+      }
+
+      const lines = users.map((u, i) => {
+        const name = u.username ? `@${u.username}` : (u.firstName || `id${u.telegramId}`);
+        return `${i + 1}. ${name} — *${u.points}* балів`;
+      });
+
+      await ctx.reply(
+        `🏆 *Топ ${users.length} по балах*\n\n${lines.join('\n')}`,
+        { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+      );
+    } catch {
+      await ctx.reply('❌ Помилка завантаження.', { reply_markup: getOwnerKeyboard() });
+    }
     return;
   }
 
