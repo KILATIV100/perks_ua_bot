@@ -95,10 +95,14 @@ function normalizePosterPriceToKopiyky(price: PosterProduct['price']): number {
 export class PosterService {
   constructor(private prisma: PrismaClient) {}
 
-  private buildUrl(method: string, params: Record<string, string> = {}, tokenOverride?: string): string {
-    const token = tokenOverride || POSTER_ACCESS_TOKEN;
-    const query = new URLSearchParams({ token, ...params });
+  private buildUrl(method: string, params: Record<string, string> = {}, token?: string): string {
+    const query = new URLSearchParams({ token: token || POSTER_ACCESS_TOKEN, ...params });
     return `${POSTER_API_URL}/${method}?${query.toString()}`;
+  }
+
+  /** Returns the effective Poster token for a given location (falls back to global env). */
+  private resolveToken(locationToken?: string | null): string {
+    return locationToken || POSTER_ACCESS_TOKEN;
   }
 
   async getCategories(): Promise<PosterCategory[]> {
@@ -303,8 +307,6 @@ export class PosterService {
    * when the Poster account doesn't have webhook configuration available.
    */
   async pollNewTransactions(lookbackMinutes = 10): Promise<{ processed: number; skipped: number; errors: number }> {
-    if (!POSTER_ACCESS_TOKEN) return { processed: 0, skipped: 0, errors: 0 };
-
     const now = Math.floor(Date.now() / 1000);
     const from = now - lookbackMinutes * 60;
 
@@ -312,41 +314,59 @@ export class PosterService {
     let skipped = 0;
     let errors = 0;
 
-    try {
-      const url = this.buildUrl('dash.getTransactions', {
-        date_from: String(from),
-        date_to: String(now),
-      });
-      const res = await fetch(url);
-      const data = await res.json() as { response?: PosterTransaction[] };
-      const transactions = data.response || [];
+    // Collect unique tokens to poll: per-location tokens + global fallback
+    const locations = await this.prisma.location.findMany({
+      where: { isActive: true },
+      select: { id: true, slug: true, posterToken: true },
+    });
 
-      for (const tx of transactions) {
-        try {
-          // Skip if already recorded
-          const existing = await this.prisma.order.findFirst({
-            where: { posterTransactionId: tx.transaction_id },
-            select: { id: true },
-          });
-          if (existing) { skipped++; continue; }
-
-          // Process same as webhook
-          const result = await this.processTransactionWebhook({
-            account: '',
-            object: 'transaction',
-            object_id: tx.transaction_id,
-            action: 'added',
-          });
-
-          if (result.success) processed++;
-          else skipped++;
-        } catch {
-          errors++;
-        }
+    // Deduplicate: group locations by their effective token
+    const tokenMap = new Map<string, string>(); // token → locationSlug (for logging)
+    for (const loc of locations) {
+      const token = loc.posterToken || POSTER_ACCESS_TOKEN;
+      if (token && !tokenMap.has(token)) {
+        tokenMap.set(token, loc.slug);
       }
-    } catch (err) {
-      console.error('[Poster] Poll failed:', err);
-      errors++;
+    }
+
+    if (tokenMap.size === 0) return { processed: 0, skipped: 0, errors: 0 };
+
+    for (const [token, locationSlug] of tokenMap) {
+      try {
+        const url = this.buildUrl('dash.getTransactions', {
+          date_from: String(from),
+          date_to: String(now),
+        }, token);
+        const res = await fetch(url);
+        const data = await res.json() as { response?: PosterTransaction[] };
+        const transactions = data.response || [];
+
+        for (const tx of transactions) {
+          try {
+            const existing = await this.prisma.order.findFirst({
+              where: { posterTransactionId: tx.transaction_id },
+              select: { id: true },
+            });
+            if (existing) { skipped++; continue; }
+
+            const result = await this.processTransactionWebhook({
+              account: '',
+              object: 'transaction',
+              object_id: tx.transaction_id,
+              action: 'added',
+              _token: token,
+            });
+
+            if (result.success) processed++;
+            else skipped++;
+          } catch {
+            errors++;
+          }
+        }
+      } catch (err) {
+        console.error(`[Poster] Poll failed for location ${locationSlug}:`, err);
+        errors++;
+      }
     }
 
     return { processed, skipped, errors };
@@ -359,6 +379,8 @@ export class PosterService {
     action: string;
     data?: string;
     time?: string;
+    /** Internal: per-location token resolved by pollNewTransactions */
+    _token?: string;
   }): Promise<{
     success: boolean;
     userId?: string;
@@ -368,6 +390,8 @@ export class PosterService {
     if (payload.object !== 'transaction' || payload.action !== 'added') {
       return { success: false };
     }
+
+    const token = this.resolveToken(payload._token);
 
     try {
       const token = getPosterTokenBySpot(undefined);
@@ -450,20 +474,19 @@ export class PosterService {
    * and save returned incoming_order_id to Order.posterOrderId.
    */
   async createIncomingOrderForPaidOrder(orderId: string): Promise<{ success: boolean; posterOrderId?: string; reason?: string }> {
-    if (!POSTER_ACCESS_TOKEN) {
-      return { success: false, reason: 'POSTER_TOKEN_MISSING' };
-    }
-
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        location: { select: { posterSpotId: true } },
+        location: { select: { posterSpotId: true, posterToken: true } },
         items: { include: { product: { select: { posterId: true, posterProductId: true } } } },
       },
     });
 
     if (!order) return { success: false, reason: 'ORDER_NOT_FOUND' };
     if (order.posterOrderId) return { success: true, posterOrderId: order.posterOrderId };
+
+    const token = this.resolveToken(order.location.posterToken);
+    if (!token) return { success: false, reason: 'POSTER_TOKEN_MISSING' };
 
     const spotId = order.location.posterSpotId || Number(process.env.POSTER_SPOT_ID || 0);
     if (!spotId) return { success: false, reason: 'SPOT_ID_MISSING' };
@@ -495,7 +518,7 @@ export class PosterService {
       },
     };
 
-    const response = await fetch(`${POSTER_API_URL}/incomingOrders.createIncomingOrder?token=${posterToken}`, {
+    const response = await fetch(`${POSTER_API_URL}/incomingOrders.createIncomingOrder?token=${token}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

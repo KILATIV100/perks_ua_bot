@@ -137,6 +137,9 @@ const waitingForRoleAssignment = new Set<number>();
 // Store owners waiting for secret drink input
 const waitingForSecretDrink = new Set<number>();
 
+// Store owners waiting for Poster token input (format: <locationSlug> <token> [account])
+const waitingForPosterToken = new Set<number>();
+
 // Random notification messages
 const PROXIMITY_MESSAGES = [
   "Відчуваєш цей аромат? ☕️ Ти всього в 5 хвилинах від ідеального капучино. Заходь!",
@@ -481,6 +484,8 @@ function getOwnerKeyboard(): Keyboard {
     .text('👥 Керування ролями')
     .text('🎵 Додати трек')
     .text('📦 Експорт')
+    .row()
+    .text('🏆 Топ балів')
     .resized();
 }
 
@@ -1022,6 +1027,58 @@ bot.command('secret', async (ctx) => {
   );
 });
 
+// /setpostertoken — Set Poster API token for a specific location (owner only)
+bot.command('setpostertoken', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const { isOwner } = await getUserRole(userId);
+  if (!isOwner) {
+    await ctx.reply('❌ Ця команда доступна тільки для власника.');
+    return;
+  }
+
+  // Check if arguments passed inline: /setpostertoken slug token [account]
+  const args = ctx.message?.text?.split(' ').slice(1) ?? [];
+  if (args.length >= 2) {
+    const [locationSlug, posterToken, posterAccount] = args;
+    const response = await fetch(`${API_URL}/api/admin/set-location-poster`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: String(userId), locationSlug, posterToken, posterAccount }),
+    });
+    const data = await response.json() as { success?: boolean; error?: string };
+    if (data.success) {
+      await ctx.reply(
+        `✅ *Poster токен для "${locationSlug}" оновлено*\n` +
+        (posterAccount ? `Акаунт: ${posterAccount}` : ''),
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      await ctx.reply(`❌ Помилка: ${data.error ?? 'невідома помилка'}`);
+    }
+    return;
+  }
+
+  // Interactive mode
+  waitingForPosterToken.add(userId);
+  const locResp = await fetch(`${API_URL}/api/admin/locations-poster?requesterId=${userId}`);
+  const locData = await locResp.json() as { locations?: Array<{ slug: string; name: string; hasToken: boolean }> };
+  const list = (locData.locations ?? [])
+    .map((l) => `• \`${l.slug}\` — ${l.name} ${l.hasToken ? '✅' : '❌'}`)
+    .join('\n');
+
+  await ctx.reply(
+    '🔑 *Налаштування Poster токена*\n\n' +
+      `Доступні локації:\n${list || '(немає)'}\n\n` +
+      'Введи у форматі:\n' +
+      '`slug токен [назва_акаунту]`\n\n' +
+      'Приклад:\n`brovary-main abc123token mycafe`\n\n' +
+      'Натисни *⬅️ Скасувати* для виходу.',
+    { parse_mode: 'Markdown', reply_markup: getCodeVerificationKeyboard() }
+  );
+});
+
 // /wheel — Configure wheel prizes (owner only)
 bot.command('wheel', async (ctx) => {
   const userId = ctx.from?.id;
@@ -1061,6 +1118,7 @@ bot.on('message:text', async (ctx) => {
     waitingForRadioTrack.delete(userId);
     waitingForRoleAssignment.delete(userId);
     waitingForSecretDrink.delete(userId);
+    waitingForPosterToken.delete(userId);
     await ctx.reply('🏠 Головне меню', { reply_markup: getOwnerKeyboard() });
     return;
   }
@@ -1337,6 +1395,47 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
+  // Handle "Cancel" during Poster token input
+  if (text === '⬅️ Скасувати' && waitingForPosterToken.has(userId)) {
+    waitingForPosterToken.delete(userId);
+    await ctx.reply('🏠 Налаштування Poster скасовано.', { reply_markup: getOwnerKeyboard() });
+    return;
+  }
+
+  // Handle Poster token input: "<locationSlug> <token> [account]"
+  if (waitingForPosterToken.has(userId) && isOwner) {
+    waitingForPosterToken.delete(userId);
+    const parts = text.trim().split(/\s+/);
+    if (parts.length < 2) {
+      await ctx.reply(
+        '❌ Невірний формат. Використовуй:\n`slug токен [назва_акаунту]`',
+        { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+      );
+      return;
+    }
+    const [locationSlug, posterToken, posterAccount] = parts;
+    try {
+      const response = await fetch(`${API_URL}/api/admin/set-location-poster`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requesterId: String(userId), locationSlug, posterToken, posterAccount }),
+      });
+      const data = await response.json() as { success?: boolean; error?: string };
+      if (data.success) {
+        await ctx.reply(
+          `✅ *Poster токен для "${locationSlug}" оновлено!*\n` +
+          (posterAccount ? `Акаунт: \`${posterAccount}\`` : ''),
+          { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+        );
+      } else {
+        await ctx.reply(`❌ Помилка: ${data.error ?? 'невідома помилка'}`, { reply_markup: getOwnerKeyboard() });
+      }
+    } catch {
+      await ctx.reply('❌ Помилка з\'єднання.', { reply_markup: getOwnerKeyboard() });
+    }
+    return;
+  }
+
   // Handle "Export" button (Owner only)
   if (text === '📦 Експорт' && isOwner) {
     waitingForCode.delete(userId);
@@ -1367,6 +1466,36 @@ bot.on('message:text', async (ctx) => {
         `🕒 ${exportedTime}`,
       { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
     );
+    return;
+  }
+
+  // Handle "Top Points" button (Owner only)
+  if (text === '🏆 Топ балів' && isOwner) {
+    await ctx.reply('⏳ Завантажую...');
+    try {
+      const response = await fetch(`${API_URL}/api/admin/all-users?requesterId=${userId}`);
+      const data = await response.json() as { users?: Array<{ telegramId: string; firstName?: string; username?: string; points: number }> };
+      const users = (data.users ?? [])
+        .sort((a, b) => b.points - a.points)
+        .slice(0, 30);
+
+      if (users.length === 0) {
+        await ctx.reply('😶 Немає користувачів.', { reply_markup: getOwnerKeyboard() });
+        return;
+      }
+
+      const lines = users.map((u, i) => {
+        const name = u.username ? `@${u.username}` : (u.firstName || '—');
+        return `${i + 1}. ${name} \`(${u.telegramId})\` — *${u.points}* балів`;
+      });
+
+      await ctx.reply(
+        `🏆 *Топ ${users.length} по балах*\n\n${lines.join('\n')}`,
+        { parse_mode: 'Markdown', reply_markup: getOwnerKeyboard() }
+      );
+    } catch {
+      await ctx.reply('❌ Помилка завантаження.', { reply_markup: getOwnerKeyboard() });
+    }
     return;
   }
 
