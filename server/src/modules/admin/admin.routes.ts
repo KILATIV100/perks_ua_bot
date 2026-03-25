@@ -426,7 +426,8 @@ export async function adminModuleRoutes(
       }
 
       const users = await app.prisma.user.findMany({
-        select: { telegramId: true, firstName: true },
+        select: { telegramId: true, firstName: true, username: true, points: true },
+        orderBy: { points: 'desc' },
       });
 
       return reply.send({ users, total: users.length });
