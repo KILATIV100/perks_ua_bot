@@ -1,339 +1,154 @@
-# Технічний аудит PerkUp — Звіт
+# Технічний аудит PerkUp — статус проєкту (оновлено 2026-03-13)
 
-**Дата:** 2026-02-16
-**Версія:** v2.0 (Modular Monolith)
-**Стек:** Node.js (Fastify), PostgreSQL (Prisma), React (Vite), Socket.IO, grammY
+## Короткий висновок
 
----
+Проєкт уже має сильний фундамент (модульний backend, JWT-авторизація, лояльність, ігри, адмін-роути, базова інтеграція з Poster), але зараз перебуває у **гібридному стані**: частина фіч працює як production-ready, частина — як прототип або "заготовка".
 
-## 1. КРИТИЧНІ ПОМИЛКИ
+Найбільші продуктові ризики зараз:
 
-### 1.1 `devMode` дозволяє будь-кому обійти геоперевірку (CRITICAL)
-
-**Файл:** `server/src/modules/loyalty/loyalty.service.ts:163`
-
-```typescript
-const bypassGeo = DEV_TELEGRAM_IDS.has(telegramId) || input.devMode === true;
-```
-
-Поле `devMode` приймається напряму з тіла запиту (`loyalty.routes.ts:87`). Будь-який користувач може надіслати `{ devMode: true }` в POST-запиті на `/api/loyalty/spin` і крутити колесо з будь-якої точки світу без перевірки координат. Те саме стосується legacy-ендпоінту `/api/user/spin` (`routes/users.ts:255`).
-
-**Ризик:** Повне обходження геолокаційної логіки. Можливість масової "накрутки" балів.
-
-**Рішення:** Видалити `devMode` з публічного API. Обмежити bypass лише `DEV_TELEGRAM_IDS` на серверній стороні. Ніколи не довіряти клієнтському `devMode`.
+1. Немає завершеного end-to-end флоу онлайн-оплати → Poster → фіскалізація/каса/повернення.
+2. Архітектура Poster розрахована на **один токен акаунта** і не підтримує повноцінно "окремий Poster акаунт на кожну локацію".
+3. Coffee DNA у фронті/боті реалізовано як placeholder (без реального API-движка).
+4. Perky Jump технічно реалізований, але стабільність залежить від синхронізації salt/env і клієнтського флоу.
+5. Лояльність наразі частково залежить від подій Poster (transaction webhook/polling), тому без повної інтеграції покриття мережі неповне.
 
 ---
 
-### 1.2 Невідповідність формату referral-посилань (CRITICAL)
+## 1) Що зараз працює
 
-Існують **два різних формати** реферальних посилань, які генеруються різними частинами системи:
+### Backend/архітектура
+- Піднятий modular monolith на Fastify, зареєстровані модулі auth/loyalty/orders/games/poster/referral/admin тощо.  
+- Є JWT auth + refresh, маршрути API структуровані за доменами.  
+- Є модульна інтеграція Poster (`poster.service`, webhook routes, sync menu, analytics, transaction polling).  
+- Є модуль games з `submit-score` (anti-cheat перевірка hash/timestamp/реалістичності + денні ліміти).
 
-| Джерело | Формат | ID-тип |
-|---------|--------|--------|
-| Бот (клавіатура) `bot/src/index.ts:635` | `ref_<telegramId>` | Telegram ID (числовий) |
-| API `/api/referral/link` `referral.routes.ts:44` | `ref_<user.id>` | Prisma CUID (буквенно-цифровий) |
-
-Це призводить до каскадних помилок:
-
-- **v2 auth** (`auth.routes.ts:92`): `extractReferrerId` використовує regex `/^ref_?(\d+)$/` — **тільки цифри**. Посилання з CUID (з API) ніколи не спрацюють.
-- **Legacy sync** (`routes/users.ts:169`): зберігає `body.referrerId` (telegramId) у поле `referredById`, яке є FK на `User.id` (CUID). Це порушує FK-constraint і призведе до помилки Prisma.
-
-**Ризик:** Реферальна система працює лише частково. Залежно від того, яке посилання і який endpoint використовується, реферал або не зберігається, або викликає помилку БД.
-
-**Рішення:** Уніфікувати формат — використовувати або `telegramId`, або внутрішній `id` у всіх місцях. Рекомендується `telegramId`, оскільки його легко отримати в Telegram-боті.
+### Продуктові фічі
+- Локації, меню, кошик, створення замовлень (PENDING + адміністраторські нотифікації).
+- Колесо фортуни + redemption коди + points logs.
+- TicTacToe, Perky Jump 3D UI, Daily limits API.
 
 ---
 
-### 1.3 Legacy-коди несумісні з адмін-верифікацією (CRITICAL)
+## 2) Що не працює або працює частково (відносно ваших 6 пунктів)
 
-**Legacy redeem** (`routes/users.ts:451-455`) генерує коди у форматі `XX-00000` (літери + 5 цифр), наприклад `CO-77341`.
+### 2.1 «Немає інтеграції з Poster»
+**Факт:** інтеграція є, але **часткова**.
 
-**Admin verify-code** (`admin.routes.ts:33`) валідує коди regex-ом `^\d{4}$` — тільки 4 цифри.
+Що є:
+- Sync меню/категорій, webhook обробка `product/dish/incoming_order/transaction`, polling транзакцій, створення incoming order після підтвердженої оплати.
 
-Legacy-коди **ніколи не пройдуть** адмін-верифікацію. Якщо користувач обміняв бали через legacy-endpoint, бариста не зможе підтвердити код.
+Що не закрито end-to-end:
+- Немає вбудованого платіжного шлюзу в основному checkout-флоу.
+- `payment-verified` — технічний webhook-місток, а не готовий прод-флоу з провайдером.
+- Refund-процес позначений TODO.
 
-**Рішення:** Видалити legacy redeem або привести формат кодів до єдиного стандарту (4 цифри).
+**Висновок:** інтеграція з Poster існує, але ще не завершена як «бойовий» наскрізний процес.
 
----
+### 2.2 «Кожна локація має окремі меню/інтеграції (різні Poster акаунти), окрім Mark Mall»
+**Факт:** поточна архітектура цього не покриває повністю.
 
-### 1.4 Валідація gameId як UUID, але schema використовує CUID (HIGH)
+Що зараз:
+- Використовується один `POSTER_ACCESS_TOKEN` на весь сервер.
+- У `Location` є `posterSpotId`, але немає сутності "Poster account credentials per location".
+- Для Mark Mall у фронті зашитий статичний `MARK_MALL_MENU` і view-only логіка.
 
-**Файл:** `server/src/modules/games/games.routes.ts:43-44, 48`
+**Висновок:** у вас правильне спостереження — multi-account Poster не реалізований системно; Mark Mall справді винесений у статичний сценарій.
 
-```typescript
-const joinGameSchema = z.object({
-  gameId: z.string().uuid(),  // Валідує UUID
-});
-```
+### 2.3 «Не реалізовано онлайн-замовлення через Poster (синхронізація чеків/оплат/каси)»
+**Факт:** реалізовано лише частину ланцюга.
 
-Але `GameSession.id` у schema.prisma має `@id @default(cuid())`. CUID (наприклад, `cm5abc123xyz`) — **не UUID**. Валідація `z.string().uuid()` відхилить будь-який реальний game ID.
+Є:
+- Створення локального order.
+- Endpoint `/api/webhooks/payment-verified`, який після зовнішнього підтвердження оплати створює incoming order в Poster.
+- Обробка `incoming_order` webhook (accept/close/reject).
 
-**Вплив:** Неможливість приєднатися до онлайн-гри (`/api/games/join`) та зробити AI-хід (`/api/games/ai-move`).
+Немає:
+- Єдиного платіжного orchestration у checkout (init payment → callback verify/signature → payment-verified).
+- Рефандів при `incoming_order=reject`.
+- Гарантованої двосторонньої звірки оплата/чек/статус для всіх сценаріїв.
 
-**Рішення:** Замінити `z.string().uuid()` на `z.string().min(1)` або `z.string().cuid()`.
+### 2.4 «Не працює DNA»
+**Факт:** підтверджено.
 
----
+- У фронті `CoffeeDna` повертає заглушку (`totalOrders: 0`, без API-запиту).
+- У боті команда `/dna` теж має `TODO` і віддає інформаційний текст.
+- У Prisma є `DnaProfile`, тобто модель у БД передбачена, але бізнес-логіка не доведена до інтегрованого API.
 
-### 1.5 Подвійне нарахування реферального бонусу (HIGH)
+### 2.5 «Не працює перкі джамп»
+**Факт:** логіка на бекенді є, але можливі причини «не працює» в проді:
 
-Існує ризик подвійного нарахування +10 балів рефереру при змішуванні legacy та v2 endpoints:
+- Salt mismatch між `VITE_GAME_SALT` (клієнт) і `GAME_SCORE_SECRET_SALT` (сервер) → `InvalidHash`.
+- Немає явного UX-повідомлення при відхиленні score (частина помилок замовчується у фронті).
+- Можлива плутанина legacy endpoint vs новий `submit-score`.
 
-1. Користувач крутить колесо через legacy `/api/user/spin` — перевіряється `user.totalSpins === 0`, бонус нараховується, **але `referralBonusPaid` НЕ встановлюється в `true`**.
-2. Наступного дня користувач крутить через v2 `/api/loyalty/spin` — перевіряється `!user.referralBonusPaid` (все ще `false`) → бонус нараховується **повторно**.
+**Висновок:** фіча не «відсутня», але може бути нестабільною/непрозорою для користувача через середовищні та UX-проблеми.
 
-**Рішення:** Додати `referralBonusPaid: true` в legacy spin route після нарахування реферального бонусу, або повністю видалити legacy endpoint.
+### 2.6 «Єдина система лояльності окремо від Poster»
+**Факт:** частково вже так, але не повністю стандартизовано по мережі.
 
----
+- Поточна loyalty живе в PerkUp БД (points, spin, redeem, logs).
+- Але purchase-based бонуси покладаються на події Poster (`transaction` webhooks/polling) і мапінг клієнта.
 
-## 2. НЕВІДПОВІДНОСТІ ТЗ
-
-### 2.1 Розбіжності в логіці призів Колеса Фортуни
-
-| Аспект | ТЗ (концепція) | v2 реалізація | Legacy реалізація |
-|--------|---------------|---------------|-------------------|
-| Призи | 5, 10, 15 балів | 5, 10, 15, **0** ("Спробуй завтра") | 5, 10, 15 |
-| Розподіл | Не вказано | 40% / 30% / 10% / 20% | Рівномірний (33% кожен) |
-| Нульовий приз | Не згадується в ТЗ | Є (20%) | Немає |
-
-**Проблема:** Фронтенд-компонент `WheelOfFortune.tsx` показує тільки сегменти 5, 10, 15 (8 сегментів) і **не має сегменту "0 балів / Спробуй завтра"**. Якщо сервер повертає `prize: 0`, UI покаже `+0 балів!`, що виглядає як баг.
-
-### 2.2 Реферальний бонус новачкові
-
-**ТЗ:** "+5 балів новачкові".
-**v2 auth** (`auth.routes.ts:158`): `points: validReferrerUserId ? 5 : 0` — нараховує +5 при створенні.
-**Але:** Через баг з referral ID (п. 1.2), в більшості випадків `validReferrerUserId` буде `null`, і бонус не нараховується.
-
-### 2.3 Дистанція для геоперевірки
-
-**ТЗ:** "<100м від кав'ярень".
-**Код:** `MAX_SPIN_DISTANCE_METERS = Number(process.env.GEO_RADIUS_METERS) || 100` — за замовчуванням 100м, що відповідає ТЗ.
-**Бот help** (`bot/src/index.ts:518`): вказує "до 50м" — розбіжність з реальним лімітом.
-
-### 2.4 Гібридна модель магазину
-
-Модель `Product` підтримує типи `MENU`, `MERCH`, `BEANS` через enum `ProductType`. Однак у моделі `Order` та `OrderItem` немає розрізнення логіки кошика для різних типів товарів. Всі товари обробляються однаково — це може не відповідати вимогам "різної логіки кошика" з ТЗ.
+**Висновок:** ядро єдиної лояльності вже є у PerkUp, однак треба доробити незалежний від Poster capture транзакцій або уніфікований ingestion-шар для всіх локацій/кас.
 
 ---
 
-## 3. ПРОБЛЕМИ БЕЗПЕКИ
+## 3) План виправлення (пріоритети)
 
-### 3.1 Socket.IO без аутентифікації
+## P0 (критично, 1-2 спринти)
+1. **Завершити online payment orchestration**:
+   - Стандартний payment service (create payment, callback verify, idempotency key).
+   - Після verify автоматично викликати `createIncomingOrderForPaidOrder`.
+   - Реалізувати refund flow на reject/cancel.
 
-**Файл:** `server/src/modules/games/games.sockets.ts:42`
+2. **Прибрати технічний борг по подвійних webhook-ендпоінтах Poster**:
+   - Залишити один канонічний endpoint (`/api/webhooks/poster`) і прибрати дубль логіки.
 
-Socket-з'єднання не перевіряють JWT або Telegram initData. Будь-хто може:
-- Підключитися до сокетів
-- Відправити `game:move` з довільним `playerId`
-- Маніпулювати ходами іншого гравця
+3. **Perky Jump observability**:
+   - Логувати/повертати клієнту чіткі причини `InvalidHash`, `ExpiredScore`, `UnrealisticScore`.
+   - Додати health-check endpoint конфігурації game salt (без розкриття секрету, лише статус matched/missing).
 
-**Рішення:** Додати middleware аутентифікації для Socket.IO:
-```typescript
-io.use((socket, next) => {
-  const token = socket.handshake.auth.token;
-  const payload = verifyAccessToken(token);
-  if (!payload) return next(new Error('Authentication error'));
-  socket.data.userId = payload.userId;
-  next();
-});
-```
+## P1 (високий, 2-4 спринти)
+4. **Multi-account Poster per location**:
+   - Додати таблицю `LocationPosterConfig` (api token / account id / spot mapping / active flag).
+   - Винести Poster client factory: вибір credentials по location.
+   - Окремі синки меню по локації.
 
-### 3.2 Legacy Perky Jump endpoint без античіту
+5. **DNA MVP**:
+   - API: `GET /api/users/:id/dna` + background recompute job.
+   - Метрики: top drink, time preference, sugar-free ratio, top location.
+   - Відмова від заглушок у фронті/боті.
 
-**Файл:** `server/src/modules/games/games.routes.ts:450-469`
+6. **Уніфікація лояльності незалежно від каси**:
+   - Ввести шар `PurchaseEvent` (джерела: Poster webhook, manual import, external POS connector).
+   - Нарахування балів тільки через один service-алгоритм.
 
-Endpoint `/api/games/perkie-jump/save` приймає `beansCollected` без:
-- Перевірки хешу
-- Перевірки часу гри
-- Денного ліміту балів
+## P2 (середній)
+7. **Mark Mall strategy**:
+   - Або підключити окремий Poster акаунт і прибрати статичне меню,
+   - або залишити view-only, але явно відобразити це в адмінці та операційному регламенті.
 
-Будь-хто може надіслати `{ telegramId: "...", beansCollected: 99999 }` і отримати максимальні бали.
-
-### 3.3 Відомий salt для хешування scores
-
-**Файл:** `server/src/shared/middleware/telegramAuth.ts:122`
-
-```typescript
-const salt = process.env.GAME_SCORE_SECRET_SALT ?? 'perkie-default-salt-change-me';
-```
-
-Якщо env-змінна не встановлена, використовується default salt, який є публічно доступним у коді. Це дозволяє згенерувати валідний хеш для довільного score.
-
-### 3.4 JWT secrets з дефолтними значеннями
-
-**Файл:** `server/src/shared/jwt.ts:12-13`
-
-```typescript
-const JWT_SECRET = process.env.JWT_SECRET || 'perkup-dev-jwt-secret-change-in-production';
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'perkup-dev-refresh-secret-change-in-production';
-```
-
-Якщо env-змінні відсутні, токени підписуються передбачуваним ключем.
-
-### 3.5 CORS `origin: true`
-
-**Файл:** `server/src/index.ts:59`
-
-`origin: true` дозволяє запити з будь-якого домену. Для production-середовища з JWT-авторизацією рекомендується обмежити до конкретних доменів (`perkup.com.ua`).
-
-### 3.6 Legacy spin endpoint без Redis lock
-
-**Файл:** `server/src/routes/users.ts:237`
-
-Legacy `/api/user/spin` не використовує Redis lock і idempotency key. Це дозволяє race condition при швидких повторних запитах — можливе подвійне нарахування балів за один день.
+8. **Операційна аналітика**:
+   - Дашборд по конверсії: created order → paid → sent to Poster → accepted → ready.
 
 ---
 
-## 4. ПЕРЕВІРКА СПЕЦИФІЧНИХ ВИМОГ
+## 4) Практичні шляхи вирішення саме ваших пунктів
 
-### 4.1 `ignoreTrailingSlash` у Fastify
-
-**Статус:** ✅ Активовано
-
-```typescript
-// server/src/index.ts:52
-const app = Fastify({
-  logger: true,
-  ignoreTrailingSlash: true,
-});
-```
-
-### 4.2 `seed.ts` для автоматичного заповнення товарів
-
-**Статус:** ✅ Реалізовано
-
-- `prisma/seed.ts` — ручний seed-скрипт (очищає і створює).
-- `index.ts:105-121` — auto-seed при старті сервера (тільки якщо таблиці порожні).
-- Дані: `server/src/data/seedData.ts` — 3 локації + повний каталог продуктів.
-
-### 4.3 Генерація 4-значного коду з валідацією 15 хв
-
-**Статус:** ✅ Реалізовано в v2, ⚠️ несумісно в legacy
-
-- **V2** (`loyalty.service.ts:352`): `Math.floor(1000 + Math.random() * 9000)` → 4 цифри. Expiry = 15 хв. Перевірка унікальності через Redis. Перевірка активного коду перед генерацією нового.
-- **Legacy** (`routes/users.ts:451`): формат `XX-00000` — несумісний з admin-верифікацією (див. п. 1.3).
-
-### 4.4 Скидання спіну о 00:00 за Києвом
-
-**Статус:** ✅ Коректно реалізовано
-
-- `shared/utils/timezone.ts` використовує `Intl.DateTimeFormat` з `timeZone: 'Europe/Kyiv'`.
-- `lastSpinDate` зберігається як `String` у форматі `YYYY-MM-DD` (за Київським часом).
-- `hasSpunTodayKyiv()` порівнює дату-рядок зі сьогоднішньою датою за Києвом.
-- `getNextKyivMidnight()` коректно обчислює UTC-час наступної півночі за Києвом, враховуючи DST автоматично через `Intl` API.
-- **Зауваження:** Використання `String` для `lastSpinDate` замість `DateTime` — навмисне рішення для уникнення timezone-проблем при порівнянні. Працює коректно.
+1. **Poster інтеграція** → не переробляти з нуля, а добудувати payment/refund/idempotency навколо існуючого `PosterService`.
+2. **Різні акаунти на локаціях** → відмовитись від глобального `POSTER_ACCESS_TOKEN`, перейти на `location-scoped credentials`.
+3. **Онлайн-замовлення/чеки/каса** → стандартизувати state machine замовлення + webhooks провайдера + webhook Poster.
+4. **DNA** → запустити MVP на основі вже наявної таблиці `DnaProfile` і історії `orders/order_items`.
+5. **Perky Jump** → вирівняти env (salt), додати прозорі повідомлення в UI, прибрати silent fail.
+6. **Єдина лояльність по мережі** → події покупок централізовано збирати в PerkUp, Poster зробити лише одним із джерел подій, а не "джерелом істини".
 
 ---
 
-## 5. SOCKET.IO (TIC-TAC-TOE)
+## 5) Рекомендована дорожня карта (8 тижнів)
 
-### 5.1 Стабільність кімнат
+- **Тиждень 1-2:** Payment orchestration + idempotency + refund skeleton.
+- **Тиждень 3-4:** Multi-location Poster credentials + меню sync per location.
+- **Тиждень 5:** DNA API MVP + інтеграція фронт/бот.
+- **Тиждень 6:** Perky Jump hardening + UX помилок + аналітика.
+- **Тиждень 7-8:** Loyalty ingestion layer + backfill і звірка балів по історичних покупках.
 
-Базова логіка кімнат працює:
-- `game:join` → `socket.join(`game:${gameId}`)` ✅
-- `game:move` → валідація ходу → broadcast `game:update` ✅
-- Перевірка черговості ходів ✅
-- Нарахування балів за перемогу (max 10/день) ✅
-
-### 5.2 Що станеться при від'єднанні гравця (ПРОБЛЕМА)
-
-**Файл:** `server/src/modules/games/games.sockets.ts:188-190`
-
-```typescript
-socket.on('disconnect', () => {
-  console.log(`[Socket.IO] Client disconnected: ${socket.id}`);
-});
-```
-
-**При від'єднанні:**
-- Гра залишається в статусі `PLAYING` назавжди
-- Інший гравець не отримує повідомлення
-- Немає таймауту для покинутих ігор
-- Немає механізму переведення гри в `ABANDONED`
-- Немає автоматичної перемоги для гравця, що залишився
-
-**Рішення:**
-1. Зберігати маппінг `socketId → gameId, playerId`.
-2. При `disconnect` — встановити таймер (30 сек). Якщо гравець не перепідключиться, перевести гру в `ABANDONED` або зарахувати перемогу опоненту.
-3. Повідомити іншого гравця через `game:opponent_disconnected`.
-
----
-
-## 6. ПОРАДИ ЩОДО ОПТИМІЗАЦІЇ
-
-### 6.1 Видалити legacy endpoints
-
-Legacy-маршрути (`/api/user/spin`, `/api/user/redeem`, `/api/user/sync`) дублюють v2-функціональність з гіршою безпекою та іншою логікою. Вони створюють поверхню атаки і ризик невідповідної поведінки. Рекомендується:
-1. Перевести всіх клієнтів на v2 endpoints.
-2. Видалити `server/src/routes/users.ts` повністю.
-3. Оновити бот (`bot/src/index.ts`) для використання v2 API (JWT auth замість telegramId у тілі).
-
-### 6.2 Транзакційна цілісність спіну
-
-V2 spin (`loyalty.service.ts:209-261`) використовує `prisma.$transaction` — це добре. Але Redis lock (крок 2) і idempotency cache (крок 7) не є частиною транзакції. Якщо транзакція впаде після кроку 5 (вибір приза) але до кроку 6 (запис у БД), lock буде відпущений у `finally`, а idempotency cache не буде створений — тобто повторний запит спрацює. Це прийнятна поведінка (retry-safe).
-
-### 6.3 Startup порядок
-
-**Файл:** `server/src/index.ts:146-150`
-
-```typescript
-await app.listen({ port: ... });
-// Post-start tasks run in background
-connectRedis().catch(...);
-```
-
-Redis підключається **після** старту сервера. Перші запити можуть потрапити на "fallback" Redis (in-memory Map), що означає:
-- Spin lock не працюватиме розподілено
-- Idempotency keys не зберігатимуться
-- Refresh tokens можуть бути втрачені
-
-**Рішення:** Підключити Redis **до** `app.listen()`.
-
-### 6.4 Оптимізація БД-запитів
-
-В `loyalty.service.ts:174-185` — при кожному спіні робиться запит `prisma.location.findMany()` для отримання всіх локацій. Оскільки локацій мало (3) і вони рідко змінюються, варто кешувати їх в пам'яті або Redis з TTL 5-10 хвилин.
-
-### 6.5 Відсутні індекси
-
-Модель `SpinHistory` не має індексу на `userId` — при зростанні таблиці запити історії для конкретного користувача будуть повільнішати. Рекомендується додати `@@index([userId])`.
-
-Модель `GameSession` не має індексу на `player1Id` або `status` — запити типу "знайти сесії гравця" або "знайти сесії зі статусом WAITING" будуть без індексів.
-
-### 6.6 Hardcoded Owner ID
-
-`OWNER_TELEGRAM_ID = '7363233852'` зустрічається в 4+ файлах:
-- `server/src/index.ts:46`
-- `server/src/routes/users.ts:8`
-- `server/src/modules/auth/auth.routes.ts:145`
-- `server/src/modules/admin/admin.routes.ts:26`
-- `server/src/modules/loyalty/loyalty.service.ts:27` (DEV_TELEGRAM_IDS)
-
-Рекомендується винести в єдину конфігурацію (`shared/config.ts`).
-
-### 6.7 Файл `api.py` у client
-
-**Файл:** `client/src/components/api.py`
-
-Python-файл знаходиться серед React-компонентів. Ймовірно, залишений випадково. Слід видалити.
-
----
-
-## 7. ПІДСУМКОВА ТАБЛИЦЯ
-
-| # | Проблема | Серйозність | Категорія |
-|---|---------|-------------|-----------|
-| 1.1 | devMode bypass геоперевірки | 🔴 CRITICAL | Безпека |
-| 1.2 | Невідповідність referral ID | 🔴 CRITICAL | Логіка |
-| 1.3 | Legacy-коди несумісні з верифікацією | 🔴 CRITICAL | Логіка |
-| 1.4 | UUID-валідація для CUID gameId | 🟠 HIGH | Логіка |
-| 1.5 | Подвійний реферальний бонус | 🟠 HIGH | Логіка |
-| 3.1 | Socket.IO без аутентифікації | 🟠 HIGH | Безпека |
-| 3.2 | Legacy Perky Jump без античіту | 🟡 MEDIUM | Безпека |
-| 3.3 | Default salt для score hash | 🟡 MEDIUM | Безпека |
-| 3.4 | Default JWT secrets | 🟡 MEDIUM | Безпека |
-| 3.5 | CORS origin: true | 🟡 MEDIUM | Безпека |
-| 3.6 | Legacy spin без Redis lock | 🟡 MEDIUM | Стабільність |
-| 5.2 | Disconnect не обробляється | 🟡 MEDIUM | Стабільність |
-| 2.1 | Розбіжність призів колеса | 🟢 LOW | Відповідність ТЗ |
-| 2.3 | Розбіжність дистанції (50м vs 100м) | 🟢 LOW | Документація |
-| 6.3 | Redis підключається після listen | 🟢 LOW | Стабільність |
-| 6.5 | Відсутні DB-індекси | 🟢 LOW | Продуктивність |

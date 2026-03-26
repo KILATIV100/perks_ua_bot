@@ -15,6 +15,8 @@
  *   GET    /api/admin/export-users    — Export all users
  *   GET    /api/admin/all-users       — Get all users for broadcast
  *   POST   /api/admin/add-points      — God mode: add points to owner
+ *   POST   /api/admin/set-location-poster — Set per-location Poster token
+ *   GET    /api/admin/locations-poster    — View Poster config for all locations
  */
 
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest } from 'fastify';
@@ -22,6 +24,7 @@ import { z } from 'zod';
 import { requireAuth, requireAdmin, requireOwner, type JwtPayload } from '../../shared/jwt.js';
 import { sendTelegramMessage } from '../../shared/utils/telegram.js';
 import { redis } from '../../shared/redis.js';
+import { PosterService } from '../poster/poster.service.js';
 
 const OWNER_TELEGRAM_ID = process.env.OWNER_TELEGRAM_ID || '7363233852';
 const OWNER_CHAT_ID = process.env.OWNER_CHAT_ID || OWNER_TELEGRAM_ID;
@@ -37,7 +40,8 @@ const verifyCodeSchema = z.object({
 
 const setRoleSchema = z.object({
   targetTelegramId: z.union([z.number(), z.string()]).transform(String),
-  newRole: z.enum(['USER', 'ADMIN', 'OWNER']),
+  newRole: z.enum(['USER', 'BARISTA', 'ADMIN', 'OWNER']),
+  preferredLocationId: z.string().min(1).optional(),
   // Legacy support
   requesterId: z.union([z.number(), z.string()]).transform(String).optional(),
 });
@@ -122,8 +126,8 @@ export async function adminModuleRoutes(
       const body = verifyCodeSchema.parse(request.body);
       const admin = await resolveAdmin(request, app.prisma);
 
-      if (!admin || (admin.role !== 'ADMIN' && admin.role !== 'OWNER')) {
-        return reply.status(403).send({ error: 'FORBIDDEN', message: 'Тільки адмін або власник може верифікувати коди.' });
+      if (!admin || (admin.role !== 'BARISTA' && admin.role !== 'ADMIN' && admin.role !== 'OWNER')) {
+        return reply.status(403).send({ error: 'FORBIDDEN', message: 'Тільки баріста, адмін або власник може верифікувати коди.' });
       }
 
       // Find the code
@@ -235,6 +239,26 @@ export async function adminModuleRoutes(
     }
   });
 
+
+  // ────────────────────────────────────────────────────────────────────────
+  // POST /api/admin/sync-menu — sync categories/products from Poster
+  // ────────────────────────────────────────────────────────────────────────
+  app.post('/sync-menu', async (request, reply) => {
+    try {
+      const admin = await resolveAdmin(request, app.prisma);
+      if (!admin || (admin.role !== 'ADMIN' && admin.role !== 'OWNER')) {
+        return reply.status(403).send({ error: 'FORBIDDEN' });
+      }
+
+      const posterService = new PosterService(app.prisma);
+      const result = await posterService.syncMenu();
+      return reply.send({ success: true, ...result });
+    } catch (error) {
+      app.log.error({ err: error }, 'Admin sync menu error');
+      return reply.status(500).send({ error: 'SYNC_MENU_FAILED' });
+    }
+  });
+
   // ────────────────────────────────────────────────────────────────────────
   // GET /api/admin/stats — 24h analytics (Owner only)
   // ────────────────────────────────────────────────────────────────────────
@@ -287,6 +311,7 @@ export async function adminModuleRoutes(
 
       return reply.send({
         role: user?.role || 'USER',
+        isBarista: user?.role === 'BARISTA',
         isAdmin: user?.role === 'ADMIN' || user?.role === 'OWNER',
         isOwner: user?.role === 'OWNER',
       });
@@ -307,7 +332,7 @@ export async function adminModuleRoutes(
       }
 
       const admins = await app.prisma.user.findMany({
-        where: { role: { in: ['ADMIN', 'OWNER'] } },
+        where: { role: { in: ['BARISTA', 'ADMIN', 'OWNER'] } },
         select: { id: true, telegramId: true, username: true, firstName: true, role: true, createdAt: true },
         orderBy: { createdAt: 'asc' },
       });
@@ -337,9 +362,16 @@ export async function adminModuleRoutes(
 
       const targetUser = await app.prisma.user.upsert({
         where: { telegramId: body.targetTelegramId },
-        update: { role: body.newRole },
-        create: { telegramId: body.targetTelegramId, role: body.newRole },
-        select: { id: true, telegramId: true, username: true, firstName: true, role: true },
+        update: {
+          role: body.newRole,
+          preferredLocationId: body.newRole === 'BARISTA' ? (body.preferredLocationId || null) : null,
+        },
+        create: {
+          telegramId: body.targetTelegramId,
+          role: body.newRole,
+          preferredLocationId: body.newRole === 'BARISTA' ? (body.preferredLocationId || null) : null,
+        },
+        select: { id: true, telegramId: true, username: true, firstName: true, role: true, preferredLocationId: true },
       });
 
       return reply.send({ success: true, user: targetUser });
@@ -394,7 +426,8 @@ export async function adminModuleRoutes(
       }
 
       const users = await app.prisma.user.findMany({
-        select: { telegramId: true, firstName: true },
+        select: { telegramId: true, firstName: true, username: true, points: true },
+        orderBy: { points: 'desc' },
       });
 
       return reply.send({ users, total: users.length });
@@ -466,5 +499,77 @@ export async function adminModuleRoutes(
       }
       return reply.status(500).send({ error: 'Failed to add points' });
     }
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // POST /api/admin/set-location-poster — Owner sets Poster token per location
+  // Body: { requesterId, locationSlug, posterToken, posterAccount? }
+  // ────────────────────────────────────────────────────────────────────────
+  app.post<{ Body: { requesterId?: string; locationSlug: string; posterToken: string; posterAccount?: string } }>(
+    '/set-location-poster',
+    async (request, reply) => {
+      try {
+        const admin = await resolveAdmin(request, app.prisma);
+        if (!admin || admin.role !== 'OWNER') {
+          return reply.status(403).send({ error: 'Only owner can configure Poster tokens' });
+        }
+
+        const { locationSlug, posterToken, posterAccount } = z.object({
+          locationSlug: z.string().min(1),
+          posterToken: z.string().min(1),
+          posterAccount: z.string().optional(),
+        }).parse(request.body);
+
+        const location = await app.prisma.location.findUnique({ where: { slug: locationSlug } });
+        if (!location) {
+          return reply.status(404).send({ error: `Location '${locationSlug}' not found` });
+        }
+
+        await app.prisma.location.update({
+          where: { slug: locationSlug },
+          data: {
+            posterToken,
+            ...(posterAccount !== undefined ? { posterAccount } : {}),
+          },
+        });
+
+        return reply.send({ success: true, locationSlug, posterAccount: posterAccount ?? location.posterAccount });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: 'Invalid request', details: error.errors });
+        }
+        app.log.error({ err: error }, 'set-location-poster error');
+        return reply.status(500).send({ error: 'Failed to update location Poster token' });
+      }
+    }
+  );
+
+  // ────────────────────────────────────────────────────────────────────────
+  // GET /api/admin/locations-poster — Owner views Poster config for all locations
+  // ────────────────────────────────────────────────────────────────────────
+  app.get('/locations-poster', async (request, reply) => {
+    const admin = await resolveAdmin(request, app.prisma);
+    if (!admin || admin.role !== 'OWNER') {
+      return reply.status(403).send({ error: 'Only owner can view Poster tokens' });
+    }
+
+    const locations = await app.prisma.location.findMany({
+      select: {
+        slug: true,
+        name: true,
+        posterSpotId: true,
+        posterAccount: true,
+        posterToken: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    return reply.send({
+      locations: locations.map((l) => ({
+        ...l,
+        posterToken: l.posterToken ? `${l.posterToken.slice(0, 6)}…` : null, // mask token
+        hasToken: !!l.posterToken,
+      })),
+    });
   });
 }

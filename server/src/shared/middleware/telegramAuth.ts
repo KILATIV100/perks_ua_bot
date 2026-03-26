@@ -1,124 +1,119 @@
-/**
- * Telegram WebApp initData Verification Middleware
- *
- * Protects API endpoints by verifying the HMAC-SHA256 signature
- * that Telegram appends to WebApp.initData.
- *
- * Spec: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
- *
- * Usage (Fastify route):
- *   app.post('/api/user/spin', { preHandler: verifyTelegramInitData }, handler)
- *
- * Or register as a hook on a plugin:
- *   app.addHook('preHandler', verifyTelegramInitData)
- */
+import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 
-import { createHmac, createHash } from 'crypto';
-import type { FastifyRequest, FastifyReply } from 'fastify';
+interface TelegramTWAUser {
+  id: number;
+  is_bot?: boolean;
+  first_name: string;
+  last_name?: string;
+  username?: string;
+  language_code?: string;
+  allows_write_to_pm?: boolean;
+  photo_url?: string;
+}
 
-const BOT_TOKEN = process.env.BOT_TOKEN ?? '';
-
-/**
- * Derive the secret key once at startup.
- * secret_key = HMAC-SHA256("WebAppData", bot_token)
- */
-const SECRET_KEY: Buffer = (() => {
-  if (!BOT_TOKEN) return Buffer.alloc(32);
-  return createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-})();
-
-/**
- * Parse and validate Telegram WebApp initData string.
- *
- * @param initData - The raw initData string from Telegram WebApp
- * @returns Parsed key-value object if valid, null if invalid/expired
- */
-export function parseTelegramInitData(
-  initData: string,
-): Record<string, string> | null {
-  if (!BOT_TOKEN) return null; // Cannot validate without token
-
-  try {
-    const params = new URLSearchParams(initData);
-    const hash = params.get('hash');
-    if (!hash) return null;
-
-    // Build the data-check-string: sorted key=value pairs, separated by \n
-    // (excluding 'hash' itself)
-    const entries: string[] = [];
-    for (const [key, value] of params.entries()) {
-      if (key !== 'hash') entries.push(`${key}=${value}`);
-    }
-    entries.sort();
-    const dataCheckString = entries.join('\n');
-
-    // Compute expected HMAC
-    const expectedHash = createHmac('sha256', SECRET_KEY)
-      .update(dataCheckString)
-      .digest('hex');
-
-    if (expectedHash !== hash) return null;
-
-    // Optional: reject data older than 1 hour to prevent replay attacks
-    const authDateStr = params.get('auth_date');
-    if (authDateStr) {
-      const authDate = Number(authDateStr);
-      const ageSeconds = Math.floor(Date.now() / 1000) - authDate;
-      if (ageSeconds > 3600) return null; // expired
-    }
-
-    // Return all fields as a plain object
-    const result: Record<string, string> = {};
-    for (const [key, value] of params.entries()) {
-      result[key] = value;
-    }
-    return result;
-  } catch {
-    return null;
+declare module 'fastify' {
+  interface FastifyRequest {
+    twaUser?: TelegramTWAUser;
   }
 }
 
-/**
- * Fastify preHandler that validates the Telegram-Init-Data header.
- *
- * Returns 401 if missing or invalid.
- * On success, attaches parsed data to request.telegramInitData (see fastify.d.ts augmentation).
- */
-export async function verifyTelegramInitData(
+function getInitDataFromRequest(request: FastifyRequest): string | null {
+  const headerInitData = request.headers['x-telegram-init-data'];
+  if (typeof headerInitData === 'string' && headerInitData.trim().length > 0) {
+    return headerInitData.trim();
+  }
+
+  const authorization = request.headers.authorization;
+  if (typeof authorization === 'string' && authorization.toLowerCase().startsWith('tma ')) {
+    const value = authorization.slice(4).trim();
+    return value.length > 0 ? value : null;
+  }
+
+  return null;
+}
+
+function getTelegramSecretKey(botToken: string): Buffer {
+  return createHmac('sha256', 'WebAppData').update(botToken).digest();
+}
+
+function validateHash(initData: string, botToken: string): URLSearchParams | null {
+  const params = new URLSearchParams(initData);
+  const hash = params.get('hash');
+
+  if (!hash || !/^[a-f0-9]{64}$/i.test(hash)) {
+    return null;
+  }
+
+  const dataCheckString = [...params.entries()]
+    .filter(([key]) => key !== 'hash')
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+
+  const computedHash = createHmac('sha256', getTelegramSecretKey(botToken))
+    .update(dataCheckString)
+    .digest('hex');
+
+  const receivedHashBuffer = Buffer.from(hash, 'hex');
+  const computedHashBuffer = Buffer.from(computedHash, 'hex');
+
+  if (receivedHashBuffer.length !== computedHashBuffer.length) {
+    return null;
+  }
+
+  if (!timingSafeEqual(receivedHashBuffer, computedHashBuffer)) {
+    return null;
+  }
+
+  return params;
+}
+
+export async function validateTWAInitData(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
-  // In development / test environments, allow bypassing with a special header
-  if (process.env.NODE_ENV === 'development' && request.headers['x-dev-bypass'] === 'true') {
+  const initData = getInitDataFromRequest(request);
+  if (!initData) {
+    reply.status(401).send({ error: 'UNAUTHORIZED', message: 'Missing Telegram initData' });
     return;
   }
 
-  const initDataHeader = request.headers['telegram-init-data'] as string | undefined;
-  if (!initDataHeader) {
-    reply.status(401).send({ error: 'Missing Telegram-Init-Data header' });
+  const botToken = process.env.BOT_TOKEN;
+  if (!botToken) {
+    request.log.error('[TWA] BOT_TOKEN is not configured');
+    reply.status(500).send({ error: 'SERVER_MISCONFIGURED', message: 'BOT_TOKEN is required' });
     return;
   }
 
-  const parsed = parseTelegramInitData(initDataHeader);
-  if (!parsed) {
-    reply.status(401).send({ error: 'Invalid or expired Telegram initData' });
+  const params = validateHash(initData, botToken);
+  if (!params) {
+    reply.status(403).send({ error: 'FORBIDDEN', message: 'Invalid Telegram initData signature' });
     return;
   }
 
-  // Attach to request for downstream handlers
-  (request as FastifyRequest & { telegramInitData: Record<string, string> }).telegramInitData = parsed;
+  const userRaw = params.get('user');
+  if (!userRaw) {
+    reply.status(403).send({ error: 'FORBIDDEN', message: 'Telegram user payload is missing' });
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(userRaw) as Partial<TelegramTWAUser>;
+    if (!parsed || typeof parsed.id !== 'number' || typeof parsed.first_name !== 'string') {
+      reply.status(403).send({ error: 'FORBIDDEN', message: 'Invalid Telegram user payload' });
+      return;
+    }
+
+    request.twaUser = parsed as TelegramTWAUser;
+  } catch {
+    reply.status(403).send({ error: 'FORBIDDEN', message: 'Invalid Telegram user payload' });
+  }
 }
 
-/**
- * Generate a SHA-256 hash for game score integrity.
- * Used server-side to verify client-submitted scores.
- *
- * hash = SHA-256( score + secret_salt + timestamp )
- */
-export function computeScoreHash(
-  score: number,
-  timestamp: number,
-): string {
+export const verifyTelegramInitData = validateTWAInitData;
+
+export function computeScoreHash(score: number, timestamp: number): string {
   const salt = process.env.GAME_SCORE_SECRET_SALT ?? 'perkie-default-salt-change-me';
   return createHash('sha256')
     .update(`${score}${salt}${timestamp}`)

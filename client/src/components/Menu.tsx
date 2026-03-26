@@ -39,32 +39,10 @@ const CATEGORY_ICONS: Record<string, string> = {
   'Холодні напої': '🧊',
   'Не кава': '🍵',
   'Їжа': '🍔',
+  'Добавки': '➕',
   'Кава на продаж': '📦',
   'Мерч': '👕',
 };
-
-const MARK_MALL_MENU: Product[] = [
-  { id: 'markmall-espresso-m', name: 'Еспресо', description: null, volume: 'M', price: '35', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-espresso-milk-m', name: 'Еспресо з молоком', description: null, volume: 'M', price: '40', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-doppio-m', name: 'Допіо / 2 Рістрето', description: null, volume: 'M', price: '50', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-ristretto-m', name: 'Рістрето', description: null, volume: 'M', price: '35', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-lungo-m', name: 'Лунго', description: null, volume: 'M', price: '35', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-americano-m', name: 'Американо', description: null, volume: 'M', price: '35', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-americano-l', name: 'Американо', description: null, volume: 'L', price: '50', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-americano-milk-m', name: 'Американо з молоком', description: null, volume: 'M', price: '55', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-americano-milk-l', name: 'Американо з молоком', description: null, volume: 'L', price: '65', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-hot-water-l', name: 'Гаряча вода', description: null, volume: 'L', price: '20', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-latte-m', name: 'Лате', description: null, volume: 'M', price: '60', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-latte-l', name: 'Лате', description: null, volume: 'L', price: '70', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-cappuccino-m', name: 'Капучино', description: null, volume: 'M', price: '65', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-cappuccino-l', name: 'Капучино', description: null, volume: 'L', price: '75', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-flat-white-m', name: 'Флет Уайт', description: null, volume: 'M', price: '70', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-mocha-m', name: 'Мокачино', description: null, volume: 'M', price: '75', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-cocoa-m', name: 'Какао', description: null, volume: 'M', price: '60', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-cocoa-l', name: 'Какао', description: null, volume: 'L', price: '70', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-milk-foam-m', name: 'Молочна пінка', description: null, volume: 'M', price: '40', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-  { id: 'markmall-warm-milk-l', name: 'Тепле молоко', description: null, volume: 'L', price: '40', category: 'Mark Mall', type: 'MENU', imageUrl: null },
-];
 
 export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true, locationName, mode }: MenuProps) {
   const [products, setProducts] = useState<Product[]>([]);
@@ -76,8 +54,6 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true, lo
   }, []);
 
   const [fetchError, setFetchError] = useState(false);
-  const isMarkMall = locationName === 'Mark Mall';
-
   const fetchProducts = async (attempt = 1) => {
     const url = `${apiUrl.replace(/\/$/, '')}/api/products`;
     try {
@@ -99,16 +75,15 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true, lo
 
   // Filter products based on mode
   const filteredByMode = useMemo(() => {
-    const baseProducts = isMarkMall && mode === 'menu' ? MARK_MALL_MENU : products;
     if (mode === 'shop') {
       // Shop: only MERCH and BEANS
-      return baseProducts.filter(p => p.type === 'MERCH' || p.type === 'BEANS');
+      return products.filter(p => p.type === 'MERCH' || p.type === 'BEANS');
     }
     // Menu: only MENU type products
-    return baseProducts.filter(p => p.type === 'MENU');
-  }, [products, mode, isMarkMall]);
+    return products.filter(p => p.type === 'MENU');
+  }, [products, mode]);
 
-  const CATEGORY_ORDER = ['Кава', 'Холодні напої', 'Не кава', 'Їжа', 'Кава на продаж', 'Мерч'];
+  const CATEGORY_ORDER = ['Кава', 'Холодні напої', 'Не кава', 'Добавки', 'Їжа', 'Кава на продаж', 'Мерч'];
 
   const categories = useMemo(() => {
     const cats = new Set<string>();
@@ -162,7 +137,7 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true, lo
   };
 
   // Mark Mall: view-only for menu items
-  const isViewOnly = mode === 'menu' && (isMarkMall || !canPreorder);
+  const isViewOnly = mode === 'menu' && !canPreorder;
   // Shop items are always orderable regardless of location
   const canOrder = mode === 'shop' || (!isViewOnly);
 
@@ -177,17 +152,10 @@ export function Menu({ apiUrl, cart, onCartChange, theme, canPreorder = true, lo
 
   return (
     <div>
-      {/* View-only banner for Menu mode at Mark Mall */}
-      {mode === 'menu' && isMarkMall && (
-        <div className="mb-4 p-3 rounded-xl text-center text-sm" style={{ backgroundColor: '#FFF8E1', color: '#92400e' }}>
-          📋 Тільки для ознайомлення. Замовляйте на місці!
-        </div>
-      )}
-
       {/* View-only banner for Menu mode without preorder */}
-      {mode === 'menu' && !canPreorder && !isMarkMall && (
+      {mode === 'menu' && !canPreorder && (
         <div className="mb-4 p-3 rounded-xl text-center text-sm" style={{ backgroundColor: '#FFF8E1', color: '#92400e' }}>
-          📍 Замовляйте на місці! Попереднє замовлення тут недоступне.
+          📍 Для цієї локації онлайн-замовлення недоступне. Меню синхронізоване для ознайомлення.
         </div>
       )}
 
